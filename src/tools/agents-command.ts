@@ -8,6 +8,7 @@ import {
 	type ChildAgentsPresentation,
 } from "../presentation/agents-navigation-adapters.ts";
 import { navigateAgents, type AgentsNavigationTarget } from "../presentation/agents-navigation.ts";
+import { editFileInExternalEditor } from "../pi-integration/external-editor.ts";
 import { openModelPolicySurface } from "../presentation/model-policy-surface.ts";
 import { openVirtualModelConfigSurface } from "../presentation/virtual-model-config-surface.ts";
 import { headlessOwnerDiagnostics, openOwnerDiagnostics } from "../presentation/owner-diagnostics-surface.ts";
@@ -113,6 +114,13 @@ async function openConfig(
 			const config = await view.setVirtualModels(definitions);
 			// Without a sync, an added or removed name reaches the Owner's own /model
 			// list only after reload; children reread the file on every request.
+			await role.syncVirtualModels();
+			return config;
+		},
+		async editPolicyFile() {
+			const { path, editorCommand } = view.workflowPolicyFile();
+			await editFileInExternalEditor(editorCommand, path);
+			const config = await view.reloadWorkflowPolicy();
 			await role.syncVirtualModels();
 			return config;
 		},

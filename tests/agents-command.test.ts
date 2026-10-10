@@ -1,5 +1,8 @@
 import "./support/supervised-run.ts";
 import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -209,6 +212,98 @@ test("the Owner's Config saves through the view, re-registers Virtual Models, an
 	assert.deepEqual(effects.filter((effect) => effect !== "refresh guidance"), ["read config", "save []", "sync"]);
 });
 
+/**
+ * An Owner whose Config opens `editorCommand` on a policy file that does not exist
+ * yet, in a `config/` directory that does not exist either, as on a fresh install.
+ */
+function ownerWithPolicyFile(editorCommand: string, effects: string[]) {
+	const directory = mkdtempSync(join(tmpdir(), "agents-command-editor-"));
+	const policyPath = join(directory, "config", "pi-durable-subagents.json");
+	const config = {
+		availableModels: [{ provider: "openai-codex", modelId: "gpt-6-astra", name: "Astra" }],
+		excludedModels: [],
+		virtualModels: { fast: [{ model: { provider: "openai-codex", modelId: "gpt-6-astra" }, thinking: "high" as const }] },
+	};
+	const view = {
+		status: () => childStatus,
+		selectionRoster: () => ({ live: [ownerStatus, childStatus], dormant: [], quarantined: [], quarantinedCandidateCount: 0 }),
+		humanAttention: () => [],
+		operationalAttention: () => [],
+		reportHistory: () => [],
+		setReportRead: () => undefined,
+		addAgentActivityChangeHandler: () => () => undefined,
+		agentTemplateSnapshot: () => ({}),
+		async virtualModelConfig() { return config; },
+		async setVirtualModels() { throw new Error("hand edits must not save through Config"); },
+		workflowPolicyFile: () => ({ path: policyPath, editorCommand }),
+		async reloadWorkflowPolicy() {
+			const saved = readFileSync(policyPath, "utf8");
+			effects.push(`reload ${saved.trim()}`);
+			return { ...config, virtualModels: saved.includes("review") ? { review: config.virtualModels.fast } : {} };
+		},
+	} as unknown as OrdinaryAgentCoordinatorView;
+	const role: AgentsCommandRole = {
+		kind: "admitted_owner",
+		view: () => view,
+		tools: { refreshSpawnGuidance() {} },
+		async syncVirtualModels() { effects.push("sync"); },
+	};
+	return { directory, policyPath, role };
+}
+
+/** Opens Config, presses e, checks the result, then leaves Config and the selector. */
+function editInConfig(check: (text: string) => void): SurfaceStep[] {
+	return [
+		async (press) => press("c"),
+		async (press, text) => {
+			await press("e");
+			// The editor is a real child process; give it time to exit and the reload to land.
+			for (let attempt = 0; attempt < 200 && !/review|exited|Could not start/u.test(text()); attempt++) {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			check(text());
+			await press("\x1b");
+		},
+		async (press) => press("\x1b"),
+	];
+}
+
+test("e in the Owner's Config runs Pi's editor on the policy file, then reloads it and re-registers Virtual Models", { timeout: 5_000 }, async () => {
+	const effects: string[] = [];
+	const scripts = mkdtempSync(join(tmpdir(), "agents-command-editor-script-"));
+	const script = join(scripts, "editor.sh");
+	// Records its arguments so the test sees the configured flag kept before the path.
+	writeFileSync(script, `printf '{"virtualModels":{"review":[]}}' > "$2"\necho "$1" > "$2.args"\n`);
+	const { policyPath, role } = ownerWithPolicyFile(`sh ${script} --wait`, effects);
+	const { ctx } = scriptedCommandContext(editInConfig((text) => {
+		assert.match(text, /review/);
+		assert.doesNotMatch(text, /fast/);
+	}), effects);
+
+	await captureCommand(role).handler("", ctx);
+
+	assert.equal(readFileSync(`${policyPath}.args`, "utf8").trim(), "--wait");
+	assert.deepEqual(effects, ["tui stop", 'reload {"virtualModels":{"review":[]}}', "sync", "tui start"]);
+});
+
+test("an editor that fails to start or exits non-zero reloads nothing and Config shows why", { timeout: 5_000 }, async () => {
+	for (const [editorCommand, expected] of [
+		["false", /Editor "false" exited with code 1/],
+		["pi-durable-subagents-no-such-editor --wait", /Could not start editor "pi-durable-subagents-no-such-editor --wait"/],
+	] as const) {
+		const effects: string[] = [];
+		const { role } = ownerWithPolicyFile(editorCommand, effects);
+		const { ctx } = scriptedCommandContext(editInConfig((text) => {
+			assert.match(text, expected);
+			assert.match(text, /fast/, "Config keeps what it showed before the editor");
+		}), effects);
+
+		await captureCommand(role).handler("", ctx);
+
+		assert.deepEqual(effects, ["tui stop", "tui start"], editorCommand);
+	}
+});
+
 test("a child's /agents selector offers no Config", { timeout: 5_000 }, async () => {
 	const { roles } = recordingRoles();
 	const { ctx, surfaces } = scriptedCommandContext([
@@ -243,7 +338,12 @@ function scriptedCommandContext(steps: readonly SurfaceStep[], effects: string[]
 				surfaces.push(`surface ${surfaces.length + 1}`);
 				return new Promise<T>((resolve, reject) => {
 					const component = factory(
-						{ terminal: { rows: 40 }, requestRender() {} },
+						{
+							terminal: { rows: 40 },
+							requestRender() {},
+							stop() { effects.push("tui stop"); },
+							start() { effects.push("tui start"); },
+						},
 						{ fg: (_c: string, text: string) => text, bg: (_c: string, text: string) => text, getBgAnsi: () => "", bold: (text: string) => text },
 						{},
 						resolve,

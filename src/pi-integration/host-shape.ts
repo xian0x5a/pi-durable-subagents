@@ -327,6 +327,7 @@ function assertSettingsManagerShape(
 		"getThemeSetting",
 		"isProjectTrusted",
 		"getCompactionSettings",
+		"getExternalEditorCommand",
 	] as const) {
 		requireFunction(settingsManager, member, `${name}.${member}`, version);
 	}

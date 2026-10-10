@@ -71,6 +71,11 @@ const READ_ONLY_MESSAGE = "Editing is disabled while the config file is invalid.
 export type VirtualModelConfigOptions = VirtualModelConfigSnapshot & Readonly<{
 	/** Writes the complete next definitions and returns what the Config tab shows now. */
 	persist(definitions: VirtualModelDefinitions): Promise<VirtualModelConfigSnapshot>;
+	/**
+	 * Hands the terminal to an external editor on the policy file, then returns what
+	 * the Config tab shows for the file as saved.
+	 */
+	editPolicyFile(): Promise<VirtualModelConfigSnapshot>;
 }>;
 
 /**
@@ -124,6 +129,7 @@ class VirtualModelConfigSurface implements Component, Focusable {
 	readonly #tui: TUI;
 	readonly #theme: Theme;
 	readonly #persist: VirtualModelConfigOptions["persist"];
+	readonly #editPolicyFile: VirtualModelConfigOptions["editPolicyFile"];
 	readonly #done: (result: void) => void;
 	#config: VirtualModelConfigSnapshot;
 	#screen: Screen = { kind: "list" };
@@ -142,8 +148,9 @@ class VirtualModelConfigSurface implements Component, Focusable {
 	) {
 		this.#tui = tui;
 		this.#theme = theme;
-		const { persist, ...config } = options;
+		const { persist, editPolicyFile, ...config } = options;
 		this.#persist = persist;
+		this.#editPolicyFile = editPolicyFile;
 		this.#config = config;
 		this.#done = done;
 	}
@@ -238,6 +245,8 @@ class VirtualModelConfigSurface implements Component, Focusable {
 		} else if (matchesKey(data, Key.enter)) {
 			if (name !== undefined) this.#openDefinition(name, 0);
 			else if (this.#requireEditable()) this.#openNameInput(undefined);
+		} else if (matchesKey(data, "e")) {
+			this.#openPolicyFile();
 		} else if (matchesKey(data, "d") && name !== undefined && this.#requireEditable()) {
 			if (pendingDelete === name) {
 				this.#save(withoutDefinition(this.#config.virtualModels, name), () => {
@@ -613,6 +622,25 @@ class VirtualModelConfigSurface implements Component, Focusable {
 		})();
 	}
 
+	/** Editing by hand is also how an invalid file, which disables Config editing, gets fixed. */
+	#openPolicyFile(): void {
+		this.#saving = true;
+		this.#tui.stop();
+		void (async () => {
+			try {
+				this.#config = await this.#editPolicyFile();
+				this.#listFocus = clampIndex(this.#listFocus, this.#listRowCount());
+			} catch (error) {
+				this.#status = { tone: "error", text: error instanceof Error ? error.message : String(error) };
+			} finally {
+				this.#saving = false;
+				this.#tui.start();
+				// The editor drew over the screen, so the TUI's previous frame is stale.
+				this.#tui.requestRender(true);
+			}
+		})();
+	}
+
 	#requireEditable(): boolean {
 		if (this.#editable()) return true;
 		this.#status = { tone: "error", text: READ_ONLY_MESSAGE };
@@ -637,10 +665,10 @@ class VirtualModelConfigSurface implements Component, Focusable {
 	#help(): string {
 		const screen = this.#screen;
 		if (!this.#editable() && (screen.kind === "list" || screen.kind === "definition")) {
-			return screen.kind === "list" ? "↑/k ↓/j · Enter open · Esc back" : "↑/k ↓/j · Esc back";
+			return screen.kind === "list" ? "↑/k ↓/j · Enter open · e edit file · Esc back" : "↑/k ↓/j · Esc back";
 		}
 		switch (screen.kind) {
-			case "list": return "↑/k ↓/j · Enter open · d delete · Esc back";
+			case "list": return "↑/k ↓/j · Enter open · d delete · e edit file · Esc back";
 			case "definition": return "Enter edit · a add · d delete · K/J move · r rename · Esc back";
 			case "name": return "Enter next · Esc cancel";
 			case "model": return "type to search · ↑ ↓ · Enter select · Esc back";

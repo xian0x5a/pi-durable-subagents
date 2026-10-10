@@ -282,6 +282,7 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 			"getThemeSetting",
 			"isProjectTrusted",
 			"getCompactionSettings",
+			"getExternalEditorCommand",
 		].map((member) => [
 			["services", "settingsManager", member],
 			`AgentSessionRuntime.services.settingsManager.${member}`,
@@ -324,6 +325,7 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 			"getThemeSetting",
 			"isProjectTrusted",
 			"getCompactionSettings",
+			"getExternalEditorCommand",
 		].map((member) => [
 			["session", "settingsManager", member],
 			`AgentSession.settingsManager.${member}`,

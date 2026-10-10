@@ -85,6 +85,7 @@ import type {
 } from "../templates/agent-templates.ts";
 import {
 	readWorkflowPolicy,
+	workflowPolicyPath,
 	WorkflowPolicyStore,
 	writeExcludedModels,
 	writeVirtualModels,
@@ -172,6 +173,9 @@ export type HumanPresentationCoordinatorView = Readonly<{
 	/** Virtual Model definitions as the Config tab shows them. */
 	virtualModelConfig(): Promise<VirtualModelConfigSnapshot>;
 	setVirtualModels(definitions: VirtualModelDefinitions): Promise<VirtualModelConfigSnapshot>;
+	/** The user policy file and the editor Pi opens for it, for editing by hand from Config. */
+	workflowPolicyFile(): Readonly<{ path: string; editorCommand: string }>;
+	reloadWorkflowPolicy(): Promise<VirtualModelConfigSnapshot>;
 	refreshTranscriptFacts(): Promise<void>;
 	resumeFromHuman(
 		text: string,
@@ -628,6 +632,30 @@ export class WorkflowCoordinator {
 		return this.virtualModelConfig();
 	}
 
+	workflowPolicyFile(): Readonly<{ path: string; editorCommand: string }> {
+		const { agentDir, settingsManager } = this.#ownerRuntime.services;
+		return {
+			path: workflowPolicyPath(agentDir),
+			editorCommand: settingsManager.getExternalEditorCommand(),
+		};
+	}
+
+	/**
+	 * Publishes a hand-edited file the way Owner resource reload does. An invalid file
+	 * publishes nothing, and the returned snapshot carries its parse error.
+	 */
+	async reloadWorkflowPolicy(): Promise<VirtualModelConfigSnapshot> {
+		const read = await readWorkflowPolicy(this.#ownerRuntime.services.agentDir);
+		if (read.ok) {
+			this.#workflowPolicy.publish(read.snapshot);
+			// Deferred boots are otherwise rechecked only on an activity change, so a
+			// raised maxConcurrentAgentRuns would not start queued children until then.
+			this.#queueDeferredBootCheck();
+			await this.#refreshTemplateSnapshots();
+		}
+		return this.virtualModelConfig();
+	}
+
 	async refreshAgentTemplateSnapshot(agentId: string): Promise<AgentTemplateCatalogueSnapshot> {
 		return this.#sessionFactory.captureTemplateSnapshotFor(this.#requireAgent(agentId));
 	}
@@ -732,6 +760,8 @@ export class WorkflowCoordinator {
 			setModelExclusions: (entries) => this.setModelExclusions(entries),
 			virtualModelConfig: () => this.virtualModelConfig(),
 			setVirtualModels: (definitions) => this.setVirtualModels(definitions),
+			workflowPolicyFile: () => this.workflowPolicyFile(),
+			reloadWorkflowPolicy: () => this.reloadWorkflowPolicy(),
 			agentLabel: (targetAgentId) =>
 				this.#agents.get(targetAgentId)?.identity.metadata.label,
 			answerTargetAgent: (toolCallId) => answerCallTargetAgentId({
