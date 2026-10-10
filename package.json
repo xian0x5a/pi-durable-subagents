@@ -34,7 +34,7 @@
     }
   },
   "pi": {
-    "image": "docs/images/agent-switcher.png",
+    "image": "https://raw.githubusercontent.com/xian0x5a/pi-durable-subagents/main/docs/images/agent-switcher.png",
     "extensions": [
       "./src/index.ts"
     ]
