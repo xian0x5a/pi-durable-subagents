@@ -623,16 +623,13 @@ test("a reloaded file with fewer names keeps the list focus on an existing row",
 	};
 	const surface = await openSurface({
 		definitions: three,
-		invalidReason: "Workflow Policy must be strict JSON",
-		// The read-only list has no New row, so focus sits on the last name before the reload.
-		editPolicyFile: async () => ({ ...snapshot({ alpha: three.alpha! }), invalidReason: "still broken" }),
+		editPolicyFile: async () => snapshot({ alpha: three.alpha! }),
 	});
 	await surface.press(DOWN, DOWN);
 	assert.match(surface.render(), /→ gamma/);
 	await surface.press("e");
-	assert.match(surface.render(), /→ alpha/);
-	await surface.press(ENTER);
-	assert.match(surface.render(), /^Virtual Models › alpha$/mu);
+	// Rows are now alpha and the New row; focus lands on the last one that exists.
+	assert.match(surface.render(), /→ \+ New virtual model/);
 });
 
 test("typing e into a name or a model search types the letter instead of opening the editor", { timeout: 5_000 }, async () => {

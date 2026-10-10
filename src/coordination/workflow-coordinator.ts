@@ -648,6 +648,9 @@ export class WorkflowCoordinator {
 		const read = await readWorkflowPolicy(this.#ownerRuntime.services.agentDir);
 		if (read.ok) {
 			this.#workflowPolicy.publish(read.snapshot);
+			// Deferred boots are otherwise rechecked only on an activity change, so a
+			// raised maxConcurrentAgentRuns would not start queued children until then.
+			this.#queueDeferredBootCheck();
 			await this.#refreshTemplateSnapshots();
 		}
 		return this.virtualModelConfig();
