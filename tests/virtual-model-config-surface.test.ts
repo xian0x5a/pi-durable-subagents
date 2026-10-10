@@ -57,6 +57,8 @@ type OpenOptions = Readonly<{
 	/** Terminal height; `resize` changes it later. */
 	rows?: number;
 	persist?: (definitions: VirtualModelDefinitions) => Promise<VirtualModelConfigSnapshot>;
+	/** Stands in for the external editor and the reload after it. */
+	editPolicyFile?: () => Promise<VirtualModelConfigSnapshot>;
 }>;
 
 function snapshot(
@@ -69,7 +71,14 @@ function snapshot(
 async function openSurface(options: OpenOptions = {}) {
 	let surface: Component | undefined;
 	const terminal = { rows: options.rows ?? 40 };
-	const tui = { terminal, requestRender() {} } as unknown as TUI;
+	/** What the surface asked of the terminal, in order, with the editor call in between. */
+	const terminalEvents: string[] = [];
+	const tui = {
+		terminal,
+		requestRender(force?: boolean) { if (force) terminalEvents.push("forced render"); },
+		stop() { terminalEvents.push("stop"); },
+		start() { terminalEvents.push("start"); },
+	} as unknown as TUI;
 	const theme = {
 		fg: (_color: string, text: string) => text,
 		bg: (_color: string, text: string) => text,
@@ -100,7 +109,9 @@ async function openSurface(options: OpenOptions = {}) {
 			return options.persist ? options.persist(definitions) : snapshot(definitions, options.models);
 		},
 		async editPolicyFile() {
-			throw new Error("This test does not open the policy file");
+			terminalEvents.push("edit");
+			if (!options.editPolicyFile) throw new Error("This test does not open the policy file");
+			return options.editPolicyFile();
 		},
 	});
 	await settle();
@@ -111,6 +122,9 @@ async function openSurface(options: OpenOptions = {}) {
 	return {
 		opened,
 		persisted,
+		terminalEvents,
+		/** How many times the editor was opened. */
+		get edits() { return terminalEvents.filter((event) => event === "edit").length; },
 		get closed() { return closed; },
 		/** The panel content, without its box frame. */
 		render: () => component().render(100).map(stripTerminalSequences)
@@ -512,6 +526,124 @@ test("Escape on the list closes Config", { timeout: 5_000 }, async () => {
 	await surface.opened;
 	assert.equal(surface.closed, true);
 	assert.deepEqual(surface.persisted, []);
+});
+
+test("e hands the terminal to the policy file editor and shows the file as saved afterwards", { timeout: 5_000 }, async () => {
+	const surface = await openSurface({
+		editPolicyFile: async () => snapshot({ review: [entry("openai-codex/gpt-6-astra", "max")] }),
+	});
+	await surface.press("e");
+	// The editor owns the terminal between stop and start; the old frame is stale after it.
+	assert.deepEqual(surface.terminalEvents, ["stop", "edit", "start", "forced render"]);
+	const list = surface.render();
+	assert.match(list, /review\s+gpt-6-astra • max/);
+	assert.doesNotMatch(list, /fast/);
+	assert.deepEqual(surface.persisted, [], "editing by hand saves nothing through Config");
+	assert.equal(surface.closed, false);
+});
+
+test("the list help advertises e whether or not the file is editable", { timeout: 5_000 }, async () => {
+	for (const invalidReason of [undefined, "Workflow Policy must be strict JSON"]) {
+		const surface = await openSurface(invalidReason === undefined ? {} : { invalidReason });
+		assert.match(surface.render(), /e edit file/, `invalidReason: ${invalidReason}`);
+	}
+});
+
+test("e fixes an invalid file: Config follows the reloaded file between read-only and editable", { timeout: 5_000 }, async () => {
+	const reloads: VirtualModelConfigSnapshot[] = [
+		{ ...snapshot(FAST), invalidReason: "Unknown field: maxConcurency" },
+		snapshot({ ...FAST, review: [entry("openai-codex/gpt-6-astra", "max")] }),
+	];
+	const surface = await openSurface({
+		invalidReason: "Workflow Policy must be strict JSON",
+		editPolicyFile: async () => reloads.shift()!,
+	});
+
+	// Still invalid after the edit: the new parse error replaces the old one, still read-only.
+	await surface.press("e");
+	assert.equal(surface.edits, 1);
+	assert.match(surface.render(), /Unknown field: maxConcurency/);
+	assert.doesNotMatch(surface.render(), /strict JSON/);
+	assert.doesNotMatch(surface.render(), /New virtual model/);
+
+	// Valid after the next edit: the error is gone and editing works again.
+	await surface.press("e");
+	assert.equal(surface.edits, 2);
+	const list = surface.render();
+	assert.doesNotMatch(list, /invalid|maxConcurency/);
+	assert.match(list, /review\s+gpt-6-astra • max/);
+	assert.match(list, /\+ New virtual model/);
+	await surface.press("d", "d");
+	assert.deepEqual(surface.persisted.map(asFile), [{ review: ["openai-codex/gpt-6-astra max"] }]);
+});
+
+test("an editor failure shows its error, keeps what Config showed, restarts the terminal, and allows a retry", { timeout: 5_000 }, async () => {
+	let failure: Error | undefined = new Error('Editor "vim" exited with code 1');
+	const surface = await openSurface({
+		async editPolicyFile() {
+			if (failure) throw failure;
+			return snapshot({});
+		},
+	});
+	await surface.press("e");
+	assert.deepEqual(surface.terminalEvents, ["stop", "edit", "start", "forced render"]);
+	const list = surface.render();
+	assert.match(list, /Editor "vim" exited with code 1/);
+	assert.match(list, /fast\s+gpt-5\.6-luna/);
+
+	failure = undefined;
+	await surface.press("e");
+	assert.equal(surface.edits, 2);
+	assert.doesNotMatch(surface.render(), /exited with code/);
+	assert.match(surface.render(), /No virtual models/);
+});
+
+test("keys pressed while the editor is open open no second editor and save nothing", { timeout: 5_000 }, async () => {
+	let finishEditing: (() => void) | undefined;
+	const surface = await openSurface({
+		editPolicyFile: () => new Promise((resolve) => { finishEditing = () => resolve(snapshot(FAST)); }),
+	});
+	await surface.press("e", "e", "d", "d", ENTER);
+	assert.equal(surface.edits, 1);
+	assert.deepEqual(surface.persisted, []);
+	assert.deepEqual(surface.terminalEvents, ["stop", "edit"], "the terminal stays with the editor until it exits");
+
+	finishEditing?.();
+	await settle();
+	assert.deepEqual(surface.terminalEvents, ["stop", "edit", "start", "forced render"]);
+	await surface.press("e");
+	assert.equal(surface.edits, 2, "e works again once the editor has exited");
+});
+
+test("a reloaded file with fewer names keeps the list focus on an existing row", { timeout: 5_000 }, async () => {
+	const three: VirtualModelDefinitions = {
+		alpha: [entry("openai-codex/gpt-6-astra", "low")],
+		beta: [entry("openai-codex/gpt-6-astra", "medium")],
+		gamma: [entry("openai-codex/gpt-6-astra", "high")],
+	};
+	const surface = await openSurface({
+		definitions: three,
+		invalidReason: "Workflow Policy must be strict JSON",
+		// The read-only list has no New row, so focus sits on the last name before the reload.
+		editPolicyFile: async () => ({ ...snapshot({ alpha: three.alpha! }), invalidReason: "still broken" }),
+	});
+	await surface.press(DOWN, DOWN);
+	assert.match(surface.render(), /→ gamma/);
+	await surface.press("e");
+	assert.match(surface.render(), /→ alpha/);
+	await surface.press(ENTER);
+	assert.match(surface.render(), /^Virtual Models › alpha$/mu);
+});
+
+test("typing e into a name or a model search types the letter instead of opening the editor", { timeout: 5_000 }, async () => {
+	const surface = await openSurface();
+	await surface.press(...downToNewRow(FAST), ENTER);
+	await surface.type("eel");
+	assert.match(surface.render(), /eel/);
+	await surface.press(ENTER);
+	await surface.type("e");
+	assert.match(surface.render(), /Virtual Models › eel › Add entry/);
+	assert.equal(surface.edits, 0);
 });
 
 const pad = (index: number) => String(index).padStart(2, "0");
