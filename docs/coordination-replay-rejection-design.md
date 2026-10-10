@@ -3,7 +3,7 @@
 Design for [#131](https://github.com/xian0x5a/pi-durable-subagents/issues/131).
 **Implemented with explicit user authorization beyond the design-only issue.**
 Execution and validation are recorded in
-`plans/done/131-coordination-replay-rejection.md`.
+`plans/131-coordination-replay-rejection.md`.
 
 ## Decision
 
