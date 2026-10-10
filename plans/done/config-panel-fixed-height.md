@@ -38,7 +38,8 @@ User's words: "the height implementation should be similar to /agents menu". The
 - [x] Config fixed height (throwaway render: every screen 19 rows at 40 terminal rows, 12 at 14, follows a resize).
 - [x] `/agents models` fixed height (20 rows at 40 terminal rows across searches and no matches).
 - [x] Docs.
-- [ ] Independent tests and review.
+- [x] Independent review: short terminals overflowed the overlay bound, the 12-row model picker showed no rows, `/agents models` reserved one row too many, and the scroll-indicator constant was duplicated. All fixed (f3da71c) by sharing the selector's short-terminal fit.
+- [x] Independent blind tests (256dbc9): fail on 51d92eb, pass after f3da71c.
 
 ## Decisions
 
@@ -46,6 +47,12 @@ User's words: "the height implementation should be similar to /agents menu". The
 
 ## Surprises & Discoveries
 
+- A fixed body budget alone is not enough: below about 13 terminal rows the fixed rows around the body exceed pi-tui's overlay bound (`floor(rows × 90%)`, capped at `rows − 2`), and pi-tui cuts the bottom, help included. The selector already handled this with its short-terminal fit, now shared.
+
 ## Outcomes & Retrospective
 
-(Filled at completion.)
+- Config and `/agents models` keep one terminal-bounded height per session, like the selector; only a resize changes it. Long Config lists scroll around the focus.
+- All three panels share overlay geometry, the centered scroll window, and the short-terminal fit in `src/presentation/overlay-frame.ts`.
+- The read-only Config view is two rows taller than the editable one (its invalid-file notice). Validity cannot change while the panel is open, so its height is still fixed for the session.
+- At 10 terminal rows or fewer the focused row can be clipped, as in the selector.
+- Lesson: probe the smallest terminals before review, not only the typical ones.
