@@ -1,7 +1,7 @@
 import type { AgentSessionRuntimeDiagnostic } from "@earendil-works/pi-coding-agent";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { parseDocument } from "yaml";
 
 import { parseExcludedModels } from "./model-exclusion.ts";
@@ -113,10 +113,14 @@ export function parseWorkflowPolicy(source: string): WorkflowPolicySnapshot {
 	return snapshot;
 }
 
+export function workflowPolicyPath(agentDir: string): string {
+	return join(agentDir, POLICY_DIRECTORY, POLICY_FILENAME);
+}
+
 export async function readWorkflowPolicy(
 	agentDir: string,
 ): Promise<WorkflowPolicyReadResult> {
-	const path = join(agentDir, POLICY_DIRECTORY, POLICY_FILENAME);
+	const path = workflowPolicyPath(agentDir);
 	let bytes: Buffer;
 	try {
 		bytes = await readFile(path);
@@ -172,8 +176,8 @@ async function rewritePolicyField(
 	field: keyof WorkflowPolicySnapshot,
 	value: unknown,
 ): Promise<void> {
-	const directory = join(agentDir, POLICY_DIRECTORY);
-	const path = join(directory, POLICY_FILENAME);
+	const path = workflowPolicyPath(agentDir);
+	const directory = dirname(path);
 	let current: string | undefined;
 	try {
 		current = await readFile(path, "utf8");

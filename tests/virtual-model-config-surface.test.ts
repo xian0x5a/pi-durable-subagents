@@ -99,6 +99,9 @@ async function openSurface(options: OpenOptions = {}) {
 			assert.deepEqual(asFile(parseVirtualModels(serializeVirtualModels(definitions))), asFile(definitions));
 			return options.persist ? options.persist(definitions) : snapshot(definitions, options.models);
 		},
+		async editPolicyFile() {
+			throw new Error("This test does not open the policy file");
+		},
 	});
 	await settle();
 	const component = () => {
