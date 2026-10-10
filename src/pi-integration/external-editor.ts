@@ -1,10 +1,14 @@
 import { spawn } from "node:child_process";
+import { mkdir } from "node:fs/promises";
+import { dirname } from "node:path";
 
 /**
  * Opens `path` in the editor command Pi resolves for Ctrl+G and resolves when it
  * exits cleanly. The caller owns the terminal: stop the TUI before, restart after.
  */
 export async function editFileInExternalEditor(command: string, path: string): Promise<void> {
+	// Editors open a missing file as new but cannot save it into a missing directory.
+	await mkdir(dirname(path), { recursive: true });
 	// Pi splits its configured command the same way, so `code --wait` works here too.
 	const [editor, ...editorArguments] = command.split(" ");
 	// Async spawn, as in Pi: on Windows a synchronous child keeps Node's console read
