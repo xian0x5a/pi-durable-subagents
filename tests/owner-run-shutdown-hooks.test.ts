@@ -12,7 +12,7 @@ import { registerParticipantLifecycle } from "../src/pi-integration/participant-
 import { AGENT_IDENTITY_CUSTOM_TYPE, adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
-import { bindTestOwnerHost, createUnboundTestOwnerHost } from "./support/pi-host.ts";
+import { bindTestOwnerHost, createUnboundTestOwnerHost, type TestOwnerHost } from "./support/pi-host.ts";
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 
 const SIDE_EFFECT_TOOL = "record_side_effect";
@@ -101,11 +101,108 @@ test("a streaming Owner Run stops working and finishes quietly after Workflow sh
 		async () => owner.coordination.message("message-after-shutdown", { operation: "poll", messageId: "message-1" }),
 		/host_shutting_down/,
 	);
-	await assert.rejects(async () => owner.lifecycle.executionStarted(), /host_shutting_down/);
+	assert.equal(await owner.lifecycle.executionStarted(), "shutting_down", "execution start reports shutdown so the native Run aborts");
 
 	releaseNativeDisposal.resolve();
 	await shutdown;
 });
+
+// A signal shutdown keeps Pi's TUI up while the final native disposal is awaited, so
+// the idle Owner can still receive input. None of it may start a new Owner Run.
+test("no input starts an Owner Run after Workflow shutdown begins while native disposal is pending", { timeout: 20_000 }, async t => {
+	const scenarios: ReadonlyArray<{
+		name: string;
+		submit(pi: ExtensionAPI, session: TestOwnerHost["session"]): Promise<void>;
+	}> = [
+		{
+			name: "interactive prompt",
+			submit: (_pi, session) => session.prompt("Typed by the human.", { source: "interactive" }),
+		},
+		{
+			name: "extension user message",
+			submit: (pi, session) => awaitingSessionCall(session, "sendUserMessage", () =>
+				pi.sendUserMessage("Sent by another extension.")),
+		},
+		{
+			name: "extension custom message with triggerTurn",
+			submit: (pi, session) => awaitingSessionCall(session, "sendCustomMessage", () =>
+				pi.sendMessage({ customType: "other-extension-note", content: "Wake up.", display: true }, { triggerTurn: true })),
+		},
+	];
+	for (const scenario of scenarios) {
+		await t.test(scenario.name, async t => {
+			const releaseNativeDisposal = deferred();
+			// Registered before the host's disposal hook so a failure cannot park cleanup.
+			t.after(() => releaseNativeDisposal.resolve());
+			let view!: OrdinaryAgentCoordinatorView;
+			let otherExtension!: ExtensionAPI;
+			const host = await createUnboundTestOwnerHost(t, pi => {
+				registerParticipantLifecycle(pi, createViewBackedParticipantHandlers("owner", () => view).lifecycle);
+			}, {
+				persistent: true,
+				additionalExtensionFactories: [pi => { otherExtension = pi; }],
+			});
+			await bindTestOwnerHost(host, "tui");
+			const identity = adoptOrValidateOwnerIdentity(host.runtime);
+			const coordinator = await createTestWorkflowCoordinator(host, identity, {
+				entryModulePath: "<inline:pi-durable-subagents>",
+			});
+			view = coordinator.forAgent(identity.agentId);
+
+			let providerRequests = 0;
+			// The faux provider resolves a step before checking abort; real providers
+			// throw on an aborted signal before any network call. Count live requests only.
+			host.model.setResponses(Array.from({ length: 4 }, () => (_context, options) => {
+				if (!options?.signal?.aborted) providerRequests += 1;
+				return fauxAssistantMessage("Owner replied.");
+			}));
+			// Control: the same input starts an Owner Run before shutdown, so a zero
+			// below means the input was refused, not that the harness never drove it.
+			await scenario.submit(otherExtension, host.session);
+			assert.equal(providerRequests, 1, "the input starts an Owner Run before shutdown");
+			assert.equal(host.session.isIdle, true, "the Owner is idle when shutdown begins");
+			const notificationsBeforeShutdown = host.ui.notifications.length;
+
+			const shutdown = coordinator.shutdown(async () => {
+				await releaseNativeDisposal.promise;
+				await host.runtime.dispose();
+			});
+			const submission = await scenario.submit(otherExtension, host.session)
+				.then(() => "resolved", (error: unknown) => `rejected: ${error instanceof Error ? error.message : String(error)}`);
+			await host.session.waitForIdle();
+
+			t.diagnostic(`submission after shutdown: ${submission}`);
+			t.diagnostic(`notifications after shutdown: ${JSON.stringify(host.ui.notifications.slice(notificationsBeforeShutdown))}`);
+			assert.equal(providerRequests, 1, "no provider request is issued after shutdown began");
+
+			releaseNativeDisposal.resolve();
+			await shutdown;
+		});
+	}
+});
+
+/**
+ * Pi's extension send APIs are fire-and-forget wrappers over the session methods.
+ * Capture the session call they make so the test can await the input's full outcome.
+ */
+async function awaitingSessionCall(
+	session: TestOwnerHost["session"],
+	method: "sendUserMessage" | "sendCustomMessage",
+	send: () => void,
+): Promise<void> {
+	type SessionSend = (...args: unknown[]) => Promise<void>;
+	const methods = session as unknown as Record<typeof method, SessionSend>;
+	const original = methods[method];
+	let call: Promise<void> | undefined;
+	methods[method] = (...args) => (call = original.apply(session, args));
+	try {
+		send();
+	} finally {
+		methods[method] = original;
+	}
+	assert.ok(call, `the extension API reached AgentSession.${method}`);
+	await call;
+}
 
 // The checks below drive the handlers with a scripted participant view, because a
 // real coordinator cannot be paused between a hook's transcript refresh and its

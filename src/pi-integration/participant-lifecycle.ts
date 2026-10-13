@@ -42,7 +42,8 @@ export type GuardedParticipantToolResult = Readonly<{
 export type SafeBoundaryOutcome = "reached" | "shutting_down";
 
 export type ParticipantLifecycleHandlers = Readonly<{
-	executionStarted(submissionSequence?: number): Promise<readonly ObligationFrame[]>;
+	/** `shutting_down` once the Workflow shutdown fence has begun; the Run must not proceed. */
+	executionStarted(submissionSequence?: number): Promise<readonly ObligationFrame[] | "shutting_down">;
 	humanInputSubmitted(input: ParticipantHumanInput): Promise<ParticipantHumanInputDisposition>;
 	primaryInputQueued(): Promise<void>;
 	humanInputMode(): Promise<"agent" | "answer" | "run_suspended">;
@@ -82,6 +83,12 @@ export function registerParticipantLifecycle(
 		// not be suppressed by an earlier cross-process obligation snapshot.
 		const localRequestIds = freezeLocalRequestIds(ctx.sessionManager, agentId);
 		const frames = await handlers.executionStarted();
+		// Extension prompts and triggerTurn messages bypass human input admission.
+		// Pi awaits agent_start before the first provider request, so stop the Run here.
+		if (frames === "shutting_down") {
+			ctx.abort();
+			return;
+		}
 		const owed = new Set(frames.map(frame => frame.requestId));
 		// The coordinator can verify requester-side Answer proof before the local
 		// author result exists. Reconcile attention for this execution, not durable

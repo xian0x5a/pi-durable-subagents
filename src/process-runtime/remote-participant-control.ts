@@ -222,8 +222,12 @@ function ownerParticipantServeMap(
 	publishWaitProgress: (toolCallId: string, progress: AgentWaitProgress) => void,
 ): ControlServeMap<ChildToOwnerControl> {
 	return {
-		"runtime.executionBegin": async ({ submissionSequence }) =>
-			({ frames: await lifecycle.executionStarted(submissionSequence) }),
+		"runtime.executionBegin": async ({ submissionSequence }) => {
+			const frames = await lifecycle.executionStarted(submissionSequence);
+			// A child keeps the plain admission refusal; its process ends with shutdown.
+			if (frames === "shutting_down") throw new Error("host_shutting_down: Workflow is shutting down");
+			return { frames };
+		},
 		"runtime.humanInput": async ({ text, images, submissionSequence }) =>
 			({ disposition: await lifecycle.humanInputSubmitted({ text, images, submissionSequence }) }),
 		"runtime.primaryInputQueued": async () => {
