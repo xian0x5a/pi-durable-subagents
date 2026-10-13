@@ -171,7 +171,9 @@ const PI_COMPACTION_SETTINGS = { compaction: { enabled: true, reserveTokens: 16_
 async function piSession(
 	t: TestContext,
 	tokens: number,
-	strategy: (event: SessionBeforeCompactEvent) => SessionBeforeCompactResult | undefined,
+	strategy: (
+		event: SessionBeforeCompactEvent,
+	) => SessionBeforeCompactResult | undefined | Promise<SessionBeforeCompactResult | undefined>,
 ): Promise<{ session: AgentSession; attempts: () => number }> {
 	let attempts = 0;
 	const host = await createUnboundTestOwnerHost(t, (pi) => {
@@ -191,6 +193,31 @@ async function piSession(
 	session.getContextUsage = () => ({ tokens, contextWindow: 200_000, percent: tokens / 2_000 });
 	return { session, attempts: () => attempts };
 }
+
+test("every caller waiting on one compaction resumes when it ends", async (t) => {
+	let releaseCompaction!: () => void;
+	const compactionReleased = new Promise<void>((resolve) => {
+		releaseCompaction = resolve;
+	});
+	const { session } = await piSession(t, 100_000, async () => {
+		await compactionReleased;
+		return { cancel: true };
+	});
+	const gateway = new ChildTurnCompactionGateway(session);
+	const compaction = session.compact().catch(() => undefined);
+	while (!session.isCompacting) await new Promise((resolve) => setImmediate(resolve));
+
+	const resumed: string[] = [];
+	const waiters = ["first", "second"].map((name) =>
+		gateway.waitForCompaction().then(() => resumed.push(name))
+	);
+	releaseCompaction();
+	await compaction;
+	await new Promise((resolve) => setImmediate(resolve));
+
+	assert.deepEqual(resumed, ["first", "second"]);
+	await Promise.all(waiters);
+});
 
 for (const path of preparationPaths) {
 	// Extensions cancel for unrelated intents, such as handing off to their own

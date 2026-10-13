@@ -8,6 +8,7 @@ import {
 import {
 	workingZonePreparationThreshold,
 } from "../policy/working-zone-preparation.ts";
+import { subscribeSession } from "../pi-integration/session-subscription.ts";
 import { isRuntimeThinkingLevel } from "../protocol/runtime-configuration.ts";
 import {
 	MESSAGE_DELIVERY_CUSTOM_TYPE,
@@ -130,7 +131,7 @@ export class ChildTurnCompactionGateway {
 			const abort = () => finish(() => reject(
 				new Error("child_turn_compaction_gateway_disposed"),
 			));
-			unsubscribe = this.#session.subscribe((event) => {
+			unsubscribe = subscribeSession(this.#session, (event) => {
 				if (event.type === "compaction_end") finish(resolve);
 			});
 			this.#generationAbort.signal.addEventListener("abort", abort, { once: true });
@@ -214,7 +215,7 @@ export class ChildTurnCompactionGateway {
 
 	async #compactForTurnPreparation(customInstructions?: string): Promise<void> {
 		let aborted: boolean | undefined;
-		const unsubscribe = this.#session.subscribe((event) => {
+		const unsubscribe = subscribeSession(this.#session, (event) => {
 			if (event.type === "compaction_end" && event.reason === "manual") {
 				aborted ??= event.aborted;
 			}
