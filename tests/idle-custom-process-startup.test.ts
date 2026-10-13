@@ -16,7 +16,7 @@ import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
 import { attachNativeChildDisplay, nativeChildDisplayText } from "./support/native-child-display.ts";
 import {
-	STARTUP_GUIDANCE,
+	preparedPromptMarker,
 	STARTUP_PROBE_ENVIRONMENT,
 	STARTUP_TOOL,
 	STARTUP_TOOL_RESULT,
@@ -26,11 +26,12 @@ const TEST_TIMEOUT_MS = 20_000;
 const OPERATION_TIMEOUT_MS = 5_000;
 const FIXTURE_PATH = fileURLToPath(new URL("./fixtures/idle-custom-startup-extension.ts", import.meta.url));
 
-// Child Delivery and reminder startup semantics live on the Child Control loopback
-// (child-idle-custom-startup). This smoke keeps what only a real child proves:
-// an inherited extension's input preflight and tool guidance inside the launched
-// process, the wire receipt, and the native renderer for the retained custom type.
-test("real process child prepares its first idle message through an inherited extension", {
+// Idle custom startup semantics live on the Child Control loopback
+// (idle-custom-startup, child-idle-custom-startup). This smoke keeps what only a
+// real child proves: the launched process's Pi runs an inherited extension's
+// before_agent_start for the custom Run and keeps its tool guidance, the wire
+// receipt, and the native renderer for the retained custom type.
+test("real process child prepares its first idle message natively through an inherited extension", {
 	timeout: TEST_TIMEOUT_MS, skip: process.platform === "win32",
 }, async t => {
 	const child = await startChild(t);
@@ -57,10 +58,15 @@ test("real process child prepares its first idle message through an inherited ex
 	assert.equal(receipt.queuedInputCount, 0);
 	await waitUntil(() => child.completed.has(deliveryId));
 	assert.equal(child.completed.get(deliveryId), undefined);
-	const committed = SessionManager.open(child.sessionPath).getEntries().filter(entry =>
-		entry.type === "custom_message" && entry.content === message.content);
+	const transcript = SessionManager.open(child.sessionPath).getEntries();
+	const committed = transcript.filter(entry => entry.type === "custom_message" && entry.content === message.content);
 	assert.equal(committed.length, 1, "the original Message must have one canonical Delivery");
-	await assertPreparedTurn(child);
+	const [entry] = committed;
+	assert.ok(entry?.type === "custom_message");
+	assert.deepEqual({ customType: entry.customType, content: entry.content, display: entry.display, details: entry.details }, message);
+	assert.deepEqual(transcript.filter(candidate => candidate.type === "message" && candidate.message.role === "user"), [],
+		"an idle custom start commits no kickoff prompt");
+	await assertPreparedTurn(child, message.customType);
 	await attachNativeChildDisplay(child.runtime);
 	await waitUntil(async () => {
 		await child.runtime.drain();
@@ -68,7 +74,7 @@ test("real process child prepares its first idle message through an inherited ex
 	}).catch(error => { throw new Error(`${error.message}\n${nativeChildDisplayText(child.runtime)}`); });
 	assert.doesNotMatch(nativeChildDisplayText(child.runtime), /agent-coordination\.message-delivery/,
 		"the retained custom type still uses its registered native renderer");
-	assert.equal(child.humanInputs(), 0, "empty extension kickoffs must not create Human Requests");
+	assert.equal(child.humanInputs(), 0, "a custom Delivery creates no Human Request");
 });
 
 async function startChild(t: TestContext) {
@@ -129,12 +135,12 @@ async function startChild(t: TestContext) {
 	return { runtime, sessionPath, probePath, contexts, completed, humanInputs: () => humanInputs };
 }
 
-async function assertPreparedTurn(child: Awaited<ReturnType<typeof startChild>>) {
+async function assertPreparedTurn(child: Awaited<ReturnType<typeof startChild>>, customType: string) {
 	assert.equal(child.contexts.length, 2, "the idle start executes one registered tool and its continuation");
 	for (const context of child.contexts) {
 		assert.ok(getCurrentTools(context.messages).some(tool => tool.name === STARTUP_TOOL));
-		assert.ok(getCurrentSystemPrompt(context.messages).includes(STARTUP_GUIDANCE), "idle custom Runs must receive before-start tool guidance, including after the tool result");
-		assert.ok(getCurrentSystemPrompt(context.messages).includes("Startup input 1; preparation 1."));
+		assert.ok(getCurrentSystemPrompt(context.messages).includes(preparedPromptMarker(1)),
+			"idle custom Runs must receive before-start tool guidance, including after the tool result");
 	}
 	const toolResult = child.contexts.at(-1)?.messages.findLast(message => message.role === "toolResult");
 	assert.ok(toolResult?.role === "toolResult");
@@ -142,10 +148,9 @@ async function assertPreparedTurn(child: Awaited<ReturnType<typeof startChild>>)
 	assert.match(JSON.stringify(toolResult.content), new RegExp(STARTUP_TOOL_RESULT));
 	const probe = (await readFile(child.probePath, "utf8")).trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
 	assert.deepEqual(probe, [
-		{ phase: "input", text: "", source: "extension" },
-		{ phase: "prepare", inputs: 1, preparations: 1 },
+		{ phase: "prepare", messageType: "custom", customType, preparation: 1 },
 		{ phase: "tool" },
-	]);
+	], "one custom preparation and no input handlers");
 }
 
 function ownerHandlers(agentId: string, sessionPath: string, humanInput: () => void): OwnerParticipantRequestHandlers<"ordinary"> {

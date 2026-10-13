@@ -18,7 +18,6 @@ import {
 } from "../presentation/agent-activity-surface.ts";
 import { registerParticipantLifecycle } from "../pi-integration/participant-lifecycle.ts";
 import { bindPrimarySteeringAdmission } from "../pi-integration/primary-steering-admission.ts";
-import { disposeSessionStartup } from "../pi-integration/session-startup.ts";
 
 export function installResolvedAgentActivityDock(
 	ui: ExtensionUIContext,
@@ -71,7 +70,6 @@ export function bindHiddenOwnerAgentExtension(options: {
 	pi.on("model_select", () => resolveView().refreshAgentActivity());
 	pi.on("session_shutdown", () => {
 		unbindPrimarySteeringAdmission();
-		disposeSessionStartup(runtime.session);
 		return prepareOwnerReplacement();
 	});
 }

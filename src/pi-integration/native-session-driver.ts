@@ -1,15 +1,11 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
 import type { AgentSession, AgentSessionEvent, PromptOptions } from "@earendil-works/pi-coding-agent";
 
 import type { AgentRunFailure, AgentRuntimeDelivery } from "../runtime/agent-runtime-host.ts";
 import { RetainedRuntimeQueue, type RuntimeQueue } from "../runtime/retained-runtime-queue.ts";
-import {
-	bindSessionStartup,
-	disposeSessionStartup,
-	isStartupPreparationBusy,
-	type StartupPreparationBusyError,
-	waitForStartupRelease,
-} from "./session-startup.ts";
+import { observeNativeRunStart } from "./native-run-start.ts";
+import { type PendingNativeStarts, pendingNativeStarts } from "./pending-native-starts.ts";
 
 /** The single Run-outcome vocabulary of the Owner Runtime, the child bridge, and the Control wire. */
 export const NATIVE_RUN_OUTCOMES = ["completed", "aborted", "error"] as const;
@@ -30,10 +26,7 @@ export type NativeSessionEvent =
 	| Readonly<{ type: "compaction_changed"; compacting: boolean }>
 	| Readonly<{ type: "state_changed" }>;
 
-/**
- * Wraps one dispatch attempt. A busy startup preparation leaves `admit` before
- * the driver waits for its release, so a gate held here never waits on it.
- */
+/** Wraps the single dispatch attempt of one Delivery. */
 export type TurnAdmission = Readonly<{
 	admit<T>(attempt: (checkpoint: () => void) => Promise<T>): Promise<T>;
 	/** Runs the synchronous native submission; `fence` fails it before Pi sees it. */
@@ -63,7 +56,17 @@ type SessionMessage = Extract<AgentSessionEvent, { type: "message_end" }>["messa
 type PromptDisposition = Parameters<NonNullable<PromptOptions["preflightResult"]>>[0];
 type NativeSubmission = Readonly<{ completion: Promise<void>; preflight: Promise<void> }>;
 type AcceptedAttempt = Readonly<{ completion: Promise<void>; runActive: boolean }>;
-type BusyAttempt = Readonly<{ busy: StartupPreparationBusyError; startupCancellation: AbortSignal }>;
+/** An idle start held back while another native start call is open. */
+type HeldStart = Readonly<{ nativeStartsChanged: Promise<void> }>;
+/** One submission's last cancellation check, at its own native Run start. */
+type StartFence = {
+	accepted: boolean;
+	/** The submission's own native start passed, or it can start none. */
+	spent: boolean;
+	readonly fence: () => void;
+	/** Releases Deliveries held behind this submission's possible start. */
+	releaseHold: () => void;
+};
 
 const IMMEDIATE_ADMISSION: TurnAdmission = { admit: attempt => attempt(() => undefined) };
 
@@ -76,6 +79,11 @@ export class NativeSessionDriver {
 	readonly #listeners = new Set<(event: NativeSessionEvent) => void>();
 	readonly #retainedQueue: RetainedRuntimeQueue;
 	readonly #proofs = new Set<TranscriptCommitProof>();
+	readonly #pendingStarts: PendingNativeStarts;
+	readonly #startFences = new AsyncLocalStorage<StartFence>();
+	readonly #removeStartObserver: () => void;
+	/** Submitted native calls not yet returned; each may still reach its start fence. */
+	#submissionsInFlight = 0;
 	#unsubscribeSession: (() => void) | undefined;
 	#compacting: boolean;
 	#disposed = false;
@@ -84,7 +92,25 @@ export class NativeSessionDriver {
 		this.#session = session;
 		this.#compacting = session.isCompacting;
 		this.#retainedQueue = new RetainedRuntimeQueue(() => session.clearQueue());
-		bindSessionStartup(session);
+		this.#pendingStarts = pendingNativeStarts(session);
+		// Only the first native start inside a submission is its own Run; a later one
+		// in the same async context, such as a deferred settlement action, is not.
+		this.#removeStartObserver = observeNativeRunStart(session.agent, {
+			beforeStart: () => {
+				const startFence = this.#startFences.getStore();
+				if (!startFence?.accepted || startFence.spent) return;
+				startFence.spent = true;
+				try {
+					startFence.fence();
+				} catch (error) {
+					// Agent-core stays unstarted, so nothing may join until Pi stops
+					// counting this Run as busy; settlement holds then take over.
+					this.#releaseAtSettlement(startFence.releaseHold);
+					throw error;
+				}
+				startFence.releaseHold();
+			},
+		});
 	}
 
 	deliver(delivery: AgentRuntimeDelivery, options: NativeDeliveryOptions = {}): NativeDeliveryDispatch {
@@ -138,9 +164,12 @@ export class NativeSessionDriver {
 		return "committed";
 	}
 
-	/** No native Run is active and no input is preparing to start one. */
+	/**
+	 * No native Run is active or preparing, and no native start call is still
+	 * open in its input phase or settlement, which Pi counts as idle.
+	 */
 	canStartIdleTurn(): boolean {
-		return this.#session.isIdle && !this.#startup().isPreparing;
+		return this.#session.isIdle && !this.#pendingStarts.open;
 	}
 
 	isIdle(): boolean {
@@ -174,11 +203,13 @@ export class NativeSessionDriver {
 	dispose(): void {
 		if (this.#disposed) return;
 		this.#disposed = true;
+		// A submission still preparing must meet its fence, which now fails it
+		// uncommitted, as its rejected proof reports.
+		if (this.#submissionsInFlight === 0) this.#removeStartObserver();
 		this.#unsubscribeSession?.();
 		this.#unsubscribeSession = undefined;
 		this.#listeners.clear();
 		for (const proof of this.#proofs) proof.reject(new Error("native_session_driver_disposed"));
-		disposeSessionStartup(this.#session);
 	}
 
 	async #dispatch(
@@ -189,10 +220,10 @@ export class NativeSessionDriver {
 	): Promise<AcceptedAttempt> {
 		for (;;) {
 			const attempt = await admission.admit(checkpoint => this.#attempt(delivery, admission, options, proof, checkpoint));
-			if (!("busy" in attempt)) return attempt;
-			// Wait outside admit: the preparing input may itself need the gate the
+			if (!("nativeStartsChanged" in attempt)) return attempt;
+			// Wait outside admit: the open call's own hooks may need the gate the
 			// admission held, so waiting inside it would deadlock both.
-			await waitForStartupRelease(attempt.busy.whenReleased, anySignal(options.signal, attempt.startupCancellation));
+			await settledUnlessAborted(attempt.nativeStartsChanged, options.signal);
 		}
 	}
 
@@ -202,56 +233,104 @@ export class NativeSessionDriver {
 		options: NativeDeliveryOptions,
 		proof: TranscriptCommitProof | undefined,
 		checkpoint: () => void,
-	): Promise<AcceptedAttempt | BusyAttempt> {
+	): Promise<AcceptedAttempt | HeldStart> {
 		const signal = options.signal;
-		// Pi's manual compaction calls abort() itself, so capture native input
-		// cancellation only after the admission's own preparation finished.
-		const startupCancellation = this.#startup().signal;
 		const fence = () => {
+			if (this.#disposed) throw new Error("native_session_driver_disposed");
 			checkpoint();
 			signal?.throwIfAborted();
-			startupCancellation.throwIfAborted();
 		};
-		// Once Pi owns the submission only the Delivery's own cancellation may
-		// reject it: an unrelated abort() poisons the session-wide startup signal.
-		const preflightFence = () => {
-			checkpoint();
-			signal?.throwIfAborted();
+		const startFence: StartFence = { accepted: false, spent: false, fence, releaseHold: () => undefined };
+		const accept = () => {
+			startFence.accepted = true;
 			admission.accepted?.();
 		};
-		const submission = (): NativeSubmission => {
+		const preflightFence = () => {
 			fence();
-			proof?.begin();
-			return this.#submit(delivery, preflightFence, proof);
+			accept();
 		};
+		const submission = (): NativeSubmission | HeldStart => this.#startFences.run(startFence, () => {
+			fence();
+			// Decide before watching: a hold can come from inside Pi's settlement
+			// emit, whose agent_settled a new proof listener would still receive.
+			const held = this.#heldStart(delivery);
+			if (held) return held;
+			proof?.begin();
+			const native = this.#submit(delivery, startFence, preflightFence, accept, proof);
+			// Counted as soon as Pi has it, so a dispose from here on keeps the fence.
+			this.#submissionsInFlight++;
+			const returned = () => {
+				startFence.spent = true;
+				startFence.releaseHold();
+				if (--this.#submissionsInFlight === 0 && this.#disposed) this.#removeStartObserver();
+			};
+			void native.completion.then(returned, returned);
+			return native;
+		});
 		const submitted = await (admission.submit ? admission.submit(submission, fence) : submission());
-		try {
-			await Promise.race([submitted.preflight, submitted.completion]);
-		} catch (error) {
-			// Only a custom startup keeps its turn across another input's preparation;
-			// native user input already queues behind it inside the startup admission.
-			if (delivery.kind === "custom" && isStartupPreparationBusy(error)) {
-				// The busy attempt reached no transcript; another input's Run settling
-				// while this Delivery waits must not settle its proof.
-				proof?.pause();
-				return { busy: error, startupCancellation };
-			}
-			throw error;
-		}
+		if ("nativeStartsChanged" in submitted) return submitted;
+		await Promise.race([submitted.preflight, submitted.completion]);
 		checkpoint();
 		return { completion: submitted.completion, runActive: !this.#session.isIdle };
 	}
 
+	/**
+	 * Holds a Delivery that would start a Run beside another open native start
+	 * call. It retries once that call starts its Run, which the Delivery then
+	 * joins in its own queue mode, or closes, after which it may start one.
+	 * - Settlement: Pi defers any start requested then, past this Delivery's await.
+	 * - Input phase: a custom start would fail that prompt. A user prompt can
+	 *   overlap it, as forwarded input replacing that very prompt must.
+	 * Any Delivery, starting or joining, also waits while a fenced start
+	 * prepares: if its fence fails it, agent-core never runs, and a joiner would
+	 * be stranded in agent-core's queue.
+	 */
+	#heldStart(delivery: AgentRuntimeDelivery): HeldStart | undefined {
+		const pending = this.#pendingStarts;
+		// Before Run setup the fenced start is still in its input phase, which a
+		// forwarded user Delivery must be able to overlap.
+		if (this.#session.isStreaming && pending.fencedStartPreparing) return { nativeStartsChanged: pending.nextChange() };
+		if (this.#session.isStreaming || (delivery.kind === "custom" && !delivery.triggerTurn)) return undefined;
+		if (pending.pastInput || (delivery.kind === "custom" && pending.inInput)) {
+			return { nativeStartsChanged: pending.nextChange() };
+		}
+		return undefined;
+	}
+
+	#releaseAtSettlement(release: () => void): void {
+		const unsubscribe = this.#session.subscribe(event => {
+			if (event.type !== "agent_settled") return;
+			// Pi walks its live listener array; leave it after this emit.
+			queueMicrotask(unsubscribe);
+			release();
+		});
+	}
+
 	#submit(
 		delivery: AgentRuntimeDelivery,
+		startFence: StartFence,
 		preflightFence: () => void,
+		accept: () => void,
 		proof: TranscriptCommitProof | undefined,
 	): NativeSubmission {
 		if (delivery.kind === "custom") {
-			return this.#startup().dispatchCustom(delivery.message, {
+			const startsRun = delivery.triggerTurn && !this.#session.isStreaming;
+			// Pi's sendCustomMessage, unlike prompt, would start a Run beside compaction.
+			if (startsRun && this.#session.isCompacting) {
+				throw new Error("custom_start_during_compaction: wait for compaction to finish and retry");
+			}
+			// Pi decides synchronously on entry whether a custom message starts a Run,
+			// joins the active one, or waits, so the call itself is its acceptance.
+			// A started Run gets Pi's own `before_agent_start` preparation.
+			preflightFence();
+			if (startsRun) startFence.releaseHold = this.#pendingStarts.holdForFencedStart();
+			const completion = this.#session.sendCustomMessage(delivery.message, {
 				triggerTurn: delivery.triggerTurn,
 				...(delivery.deliverAs === undefined ? {} : { deliverAs: delivery.deliverAs }),
-			}, preflightFence);
+			});
+			// Pi already appended or queued it; an extension Run started from those events is not its own.
+			if (!startsRun) startFence.spent = true;
+			return { completion, preflight: Promise.resolve() };
 		}
 		const content = typeof delivery.content === "string"
 			? [{ type: "text" as const, text: delivery.content }]
@@ -259,6 +338,8 @@ export class NativeSessionDriver {
 		const images = content.flatMap(part => part.type === "image" ? [part] : []);
 		let resolvePreflight!: () => void;
 		const preflight = new Promise<void>(resolve => { resolvePreflight = resolve; });
+		// Its fence fails a cancelled start just as a custom one's does.
+		if (!this.#session.isStreaming) startFence.releaseHold = this.#pendingStarts.holdForFencedStart();
 		// The same submission Pi's sendUserMessage makes, plus preflight acceptance.
 		const completion = this.#session.prompt(submittedUserText(delivery.content), {
 			expandPromptTemplates: false,
@@ -266,7 +347,15 @@ export class NativeSessionDriver {
 			...(images.length === 0 ? {} : { images }),
 			...(delivery.deliverAs === undefined ? {} : { streamingBehavior: delivery.deliverAs }),
 			preflightResult(disposition) {
-				preflightFence();
+				// Pi reports a started Run outside its Run cleanup, so throwing here would
+				// leave the session busy for good. The native start fence rejects a
+				// cancelled Delivery inside the Run instead.
+				if (disposition === "started") accept();
+				else {
+					startFence.spent = true;
+					startFence.releaseHold();
+					preflightFence();
+				}
 				proof?.userSubmissionAccepted(disposition);
 				resolvePreflight();
 			},
@@ -278,13 +367,6 @@ export class NativeSessionDriver {
 		const proof = new TranscriptCommitProof(this.#session, delivery, () => this.#proofs.delete(proof));
 		this.#proofs.add(proof);
 		return proof;
-	}
-
-	#startup() {
-		if (this.#disposed) throw new Error("native_session_driver_disposed");
-		// Owner reload disposes the startup admission of the retired extension
-		// generation; rebinding here keeps one driver across the Owner Runtime.
-		return bindSessionStartup(this.#session);
 	}
 
 	#handleSessionEvent(event: AgentSessionEvent): void {
@@ -384,11 +466,6 @@ class TranscriptCommitProof {
 		else throw new Error("invariant_violation: Pi queued a proven user Delivery that set no queue mode");
 	}
 
-	pause(): void {
-		this.#unsubscribe?.();
-		this.#unsubscribe = undefined;
-	}
-
 	dispatchCompleted(): void {
 		queueMicrotask(() => {
 			if (this.#committed()) this.#finish(() => this.#resolve(true));
@@ -442,7 +519,11 @@ class TranscriptCommitProof {
 	#finish(settlement: () => void): void {
 		if (this.#finished) return;
 		this.#finished = true;
-		this.#unsubscribe?.();
+		// Pi's _emit walks its live listener array, so removing this listener
+		// mid-emit would skip the next listener for that same event.
+		const unsubscribe = this.#unsubscribe;
+		this.#unsubscribe = undefined;
+		if (unsubscribe) queueMicrotask(unsubscribe);
 		this.#onFinished();
 		settlement();
 	}
@@ -464,6 +545,15 @@ function submittedUserText(content: Extract<AgentRuntimeDelivery, { kind: "user"
 		: content.flatMap(part => part.type === "text" ? [part.text] : []).join("\n");
 }
 
-function anySignal(...signals: ReadonlyArray<AbortSignal | undefined>): AbortSignal {
-	return AbortSignal.any(signals.filter(signal => signal !== undefined));
+async function settledUnlessAborted(settled: Promise<void>, signal: AbortSignal | undefined): Promise<void> {
+	if (!signal) return settled;
+	signal.throwIfAborted();
+	let onAbort!: () => void;
+	const aborted = new Promise<never>((_resolve, reject) => {
+		onAbort = () => reject(signal.reason);
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+	try {
+		await Promise.race([settled, aborted]);
+	} finally { signal.removeEventListener("abort", onAbort); }
 }

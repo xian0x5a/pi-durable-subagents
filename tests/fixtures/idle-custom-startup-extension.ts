@@ -9,24 +9,30 @@ export const STARTUP_TOOL_RESULT = "IDLE_STARTUP_TOOL_EXECUTED";
 
 export type StartupProbeEvent =
 	| Readonly<{ phase: "input"; text: string; source: string }>
-	| Readonly<{ phase: "prepare"; inputs: number; preparations: number }>
+	| Readonly<{ phase: "prepare"; messageType: string; customType: string | undefined; preparation: number }>
 	| Readonly<{ phase: "tool" }>;
 
-// The fixture supplies the input-time setup and before-start guidance that real
-// extensions need, without relying on a particular conversion extension.
+/** The system prompt section the Nth `before_agent_start` adds. */
+export function preparedPromptMarker(preparation: number): string {
+	return `${STARTUP_GUIDANCE}\nStartup preparation ${preparation}.`;
+}
+
+// Records every input and before-start preparation, and adds tool guidance a
+// tool continuation must keep, the way real conversion extensions do.
 export function registerStartupProbe(pi: ExtensionAPI, record: (event: StartupProbeEvent) => void): void {
-	let inputs = 0;
 	let preparations = 0;
 	pi.on("input", event => {
-		inputs++;
 		record({ phase: "input", text: event.text, source: event.source });
 	});
 	pi.on("before_agent_start", event => {
 		preparations++;
-		record({ phase: "prepare", inputs, preparations });
-		return {
-			systemPrompt: `${event.systemPrompt}\n${STARTUP_GUIDANCE}\nStartup input ${inputs}; preparation ${preparations}.`,
-		};
+		record({
+			phase: "prepare",
+			messageType: event.messageType,
+			customType: event.messageType === "custom" ? event.message.customType : undefined,
+			preparation: preparations,
+		});
+		return { systemPrompt: `${event.systemPrompt}\n${preparedPromptMarker(preparations)}` };
 	});
 	pi.registerTool({
 		name: STARTUP_TOOL,

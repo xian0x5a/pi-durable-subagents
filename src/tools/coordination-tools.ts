@@ -124,8 +124,8 @@ export type SpawnGuidanceRefresh = Readonly<{
 	/**
 	 * Re-register only Agent Spawn with guidance from this snapshot. Pi rebuilds
 	 * the base system prompt from registered definitions for each next turn, so
-	 * Runs started by Delivery or steer see it too; `before_agent_start` fires
-	 * only for prompt input. Pi does not re-activate an already registered name,
+	 * a steer into an active Run sees it too, without another `before_agent_start`.
+	 * Pi does not re-activate an already registered name,
 	 * so a refresh never undoes filtering or withholding.
 	 */
 	refreshSpawnGuidance(snapshot: AgentTemplateCatalogueSnapshot): void;

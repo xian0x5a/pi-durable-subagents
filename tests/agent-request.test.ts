@@ -25,7 +25,6 @@ import { answerSourceDeliveryRequestId } from "../src/protocol/request-resolutio
 import { adoptOrValidateOwnerIdentity } from "../src/protocol/owner-identity.ts";
 import type { AgentRunState } from "../src/runtime/agent-runtime-supervisor.ts";
 import { registerOwnerAgentTools } from "../src/tools/owner-surfaces.ts";
-import { registerSessionStartup } from "../src/pi-integration/session-startup.ts";
 import {
 	bindTestOwnerHost,
 	createUnboundTestOwnerHost,
@@ -3861,7 +3860,6 @@ async function createDormantChildHarness(
 ) {
 	let view!: ReturnType<WorkflowCoordinator["forAgent"]>;
 	const host = await createUnboundTestOwnerHost(t, (pi) => {
-		registerSessionStartup(pi);
 		registerOwnerAgentTools(pi, () => view);
 	}, {
 		persistent: true,

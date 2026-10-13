@@ -23,7 +23,6 @@ import {
 	assertTypeboxModuleShape,
 } from "./pi-integration/host-shape.ts";
 import { registerHerdrQuestionAttention } from "./pi-integration/herdr-question-attention.ts";
-import { registerSessionStartup } from "./pi-integration/session-startup.ts";
 import { VirtualModelRegistrar } from "./pi-integration/virtual-model-registration.ts";
 import { installInteractiveHostBridge } from "./pi-integration/interactive-host-bridge.ts";
 import { workflowInteractionForMode } from "./pi-integration/workflow-interaction.ts";
@@ -50,7 +49,6 @@ export const createOwnerExtension = (
 	constructWorkflowCoordinator: ConstructWorkflowCoordinator,
 ): ExtensionFactory => async (pi) => {
 	assertExtensionApiShape(pi);
-	registerSessionStartup(pi);
 	registerHerdrQuestionAttention(pi, () => admission.ownerView());
 	assertHostModuleShape(hostPi);
 	assertPiAiModuleShape(hostAi, hostPi.VERSION);

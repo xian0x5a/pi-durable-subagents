@@ -8,7 +8,6 @@ import {
 	NativeSessionDriver,
 	type NativeSessionEvent,
 } from "../src/pi-integration/native-session-driver.ts";
-import { disposeSessionStartup, registerSessionStartup } from "../src/pi-integration/session-startup.ts";
 import { deriveMessageIdentity } from "../src/protocol/identities.ts";
 import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { createTestOwnerHost, type TestOwnerHost, type TestOwnerHostOptions } from "./support/pi-host.ts";
@@ -17,10 +16,7 @@ import { oversizedPngImage } from "./support/test-images.ts";
 type RunEnded = Extract<NativeSessionEvent, { type: "run_ended" }>;
 
 async function fixture(t: TestContext, extension?: ExtensionFactory, options?: TestOwnerHostOptions) {
-	const host = await createTestOwnerHost(t, pi => {
-		registerSessionStartup(pi);
-		return extension?.(pi);
-	}, { fauxTokensPerSecond: 100_000, ...options });
+	const host = await createTestOwnerHost(t, pi => extension?.(pi), { fauxTokensPerSecond: 100_000, ...options });
 	const driver = new NativeSessionDriver(host.session);
 	t.after(() => driver.dispose());
 	const events: NativeSessionEvent[] = [];
@@ -245,18 +241,6 @@ for (const row of userCommitRows) {
 		await host.session.waitForIdle();
 	});
 }
-
-test("user commit proof follows a Delivery that a startup generation retired mid-preparation cancels", { timeout: 5000 }, async t => {
-	let host!: Awaited<ReturnType<typeof fixture>>;
-	host = await fixture(t, pi => {
-		// An extension reload disposes the startup admission of the retired generation.
-		pi.on("input", () => { disposeSessionStartup(host.session); });
-	});
-	const dispatch = host.driver.deliver({ kind: "user", content: "Prepared across a reload." }, { proveCommit: true });
-	await assert.rejects(dispatch.completion, /startup_admission_cancelled/);
-	await assert.rejects(dispatch.transcriptCommit!, /startup_admission_cancelled/);
-	assert.equal(host.session.messages.length, 0);
-});
 
 test("commit proof settles false at its own message end when nothing persisted, before the Run settles", { timeout: 5000 }, async t => {
 	// A lane-holding caller awaits this proof while the Run's own agent_end hook

@@ -197,9 +197,8 @@ for (const operation of ["send", "request"] as const) {
 			let rejectPreflight!: (error: Error) => void;
 			let nativeSettlements = 0;
 			h.recipient.record.host.addSettledHandler(() => { nativeSettlements++; });
-			// The actual-Pi startup tests establish that handled kickoff input rejects
-			// completion this way. Exercise the scheduler response without a native
-			// settlement or transcript proof that could independently release it.
+			// Exercise the scheduler response to a dispatch that fails before commit,
+			// without a native settlement or transcript proof that could release it.
 			h.recipient.dispatchOverride = () => ({
 				transcriptCommit: Promise.resolve(false),
 				completion: new Promise<void>((_resolve, reject) => { rejectPreflight = reject; }),
@@ -215,14 +214,14 @@ for (const operation of ["send", "request"] as const) {
 			assert.ok(original?.kind === "custom");
 			assert.equal(original.deliverAs, deliveryMode === "steer" ? "steer" : "followUp");
 
-			rejectPreflight(new Error("custom_startup_not_started: kickoff input was handled before delivery preparation"));
+			rejectPreflight(new Error("custom_dispatch_failed: the delivery failed before commit"));
 			await flush();
 			assert.equal(nativeSettlements, 0);
-			assert.equal(h.recipient.record.host.observe().phase, "dormant", "rejected preparation must release its exact Run without native settlement");
-			assert.equal(h.messages.hasAutonomousDeliveryProgress(), false, "a failed kickoff must leave no active dispatch reservation");
-			assert.equal(h.recipient.dispatches.length, 1, "handled input must not be retried automatically");
+			assert.equal(h.recipient.record.host.observe().phase, "dormant", "a rejected dispatch must release its exact Run without native settlement");
+			assert.equal(h.messages.hasAutonomousDeliveryProgress(), false, "a failed dispatch must leave no active dispatch reservation");
+			assert.equal(h.recipient.dispatches.length, 1, "a failed dispatch must not be retried automatically");
 			assert.equal(h.notices().length, 1);
-			assert.match(h.notices()[0].failure.reason, /custom_startup_not_started/);
+			assert.match(h.notices()[0].failure.reason, /custom_dispatch_failed/);
 			const beforeRetry = await h.message("poll-before-retry", { operation: "poll", messageId });
 			assert.equal("disposition" in beforeRetry && beforeRetry.disposition, "not_observed");
 

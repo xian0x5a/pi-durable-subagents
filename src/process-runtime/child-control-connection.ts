@@ -26,7 +26,7 @@ import {
 	deferPrimaryInputQueued,
 	type ParticipantLifecycleHandlers,
 } from "../pi-integration/participant-lifecycle.ts";
-import { bindSessionStartup } from "../pi-integration/session-startup.ts";
+import { observeNativeRunStart } from "../pi-integration/native-run-start.ts";
 import type { AgentWaitProgress } from "../protocol/agent-wait.ts";
 import { createModelVisibleModeratorObligationReminder } from "../protocol/moderator-obligation-reminder.ts";
 import type { ChildRuntimeInputHandler } from "./child-runtime-input-registry.ts";
@@ -91,7 +91,6 @@ type DeliveryExecution = {
 	finished: boolean;
 	started: boolean;
 	signal?: AbortSignal;
-	checkpoint?: () => void;
 };
 
 /** State that survives Pi /reload: one per child process and Control channel. */
@@ -254,15 +253,11 @@ function bindGeneration(
 	const activity = new RemoteAgentActivitySource(launchFacts.agentId);
 	const deliveryExecution = new AsyncLocalStorage<DeliveryExecution>();
 	const pendingDeliveries = new Map<string, () => Promise<void>>();
-	let nativeInputHandoff: { submissionSequence: number; transfer: () => void; transferred: boolean } | undefined;
+	let nativeInputHandoff: { submissionSequence: number; transferred: boolean } | undefined;
 	const inputSubmissionAcknowledgment = state.inputSubmissionAcknowledger.bind();
-	const startupAdmission = bindSessionStartup(session);
-	const removeNativeStartupObserver = startupAdmission.observeNativeStartup({
-		beforeStart() {
-			const execution = deliveryExecution.getStore();
-			if (!execution?.admitted || execution.finished || execution.started) return;
-			execution.checkpoint!();
-		},
+	// The driver fences a cancelled Delivery at native start; this captures the
+	// started Run's own signal so cancellation cannot abort a successor.
+	const removeNativeStartupObserver = observeNativeRunStart(session.agent, {
 		started(signal) {
 			const execution = deliveryExecution.getStore();
 			if (!execution?.admitted || execution.finished || execution.started) return;
@@ -318,11 +313,9 @@ function bindGeneration(
 	);
 	const handleInput: ChildRuntimeInputHandler = async (input, context) => {
 		const submissionSequence = state.nativeInputIdentity.current();
-		const transfer = input.source === "interactive" && input.streamingBehavior !== "followUp"
-			? startupAdmission.captureInputHandoff()
-			: undefined;
-		const handoff = transfer && submissionSequence !== undefined
-			? { submissionSequence, transfer, transferred: false }
+		const handoff = input.source === "interactive" && input.streamingBehavior !== "followUp" &&
+			submissionSequence !== undefined
+			? { submissionSequence, transferred: false }
 			: undefined;
 		if (handoff) nativeInputHandoff = handoff;
 		let result: Awaited<ReturnType<typeof participantInput>>;
@@ -451,7 +444,6 @@ function bindGeneration(
 			submit(submission, fence) {
 				const submit = () => {
 					fence();
-					execution.checkpoint = fence;
 					// Active queue admission belongs to this actual native execution.
 					execution.signal = session.agent.signal;
 					execution.admitted = delivery.kind === "custom" && !session.isIdle;
@@ -459,10 +451,7 @@ function bindGeneration(
 					if (
 						delivery.kind === "user" && handoff && !handoff.transferred &&
 						delivery.forwardedInput?.submissionSequence === handoff.submissionSequence
-					) {
-						handoff.transfer();
-						handoff.transferred = true;
-					}
+					) handoff.transferred = true;
 					return deliveryExecution.run(execution, submission);
 				};
 				return session.isIdle ? submit() : sequenceQueueIntention(state, submit);
