@@ -39,6 +39,8 @@ export type GuardedParticipantToolResult = Readonly<{
 	reason?: string;
 }>;
 
+export type SafeBoundaryOutcome = "reached" | "shutting_down";
+
 export type ParticipantLifecycleHandlers = Readonly<{
 	executionStarted(submissionSequence?: number): Promise<readonly ObligationFrame[]>;
 	humanInputSubmitted(input: ParticipantHumanInput): Promise<ParticipantHumanInputDisposition>;
@@ -48,7 +50,8 @@ export type ParticipantLifecycleHandlers = Readonly<{
 		input: ParticipantToolResult,
 	): Promise<GuardedParticipantToolResult | undefined>;
 	rootToolExecutionStarted(input: ParticipantRootToolExecution): Promise<void>;
-	safeBoundaryReached(): Promise<void>;
+	/** `shutting_down` once the Workflow shutdown fence has begun; it then admits no continuation. */
+	safeBoundaryReached(): Promise<SafeBoundaryOutcome>;
 	executionEnded(): Promise<void>;
 }>;
 
@@ -183,7 +186,7 @@ export function registerParticipantLifecycle(
 	// (see AgentRuntimeSupervisor.runAtSafeBoundary).
 	pi.on("turn_end", async (event, ctx) => {
 		if (event.toolResults.some(deliveredAnswer)) answerDelivered = true;
-		if (event.toolResults.length > 0) await handlers.safeBoundaryReached();
+		if (event.toolResults.length > 0 && await handlers.safeBoundaryReached() === "shutting_down") return undefined;
 		const transcript = transcriptFromSessionManager(ctx.sessionManager).inspect();
 		const frames = currentFrames(transcript, ctx.sessionManager.getSessionId());
 		const hides = resolvedAttentionEdits(transcript, frames, false);
@@ -194,7 +197,7 @@ export function registerParticipantLifecycle(
 	// continue:true requests one next provider request when canContinue.
 	// This replaces the former agent_end + sendMessage(steer, triggerTurn) loop.
 	pi.on("agent_before_settle", async (event, ctx) => {
-		await handlers.safeBoundaryReached();
+		if (await handlers.safeBoundaryReached() === "shutting_down") return undefined;
 		if (!answerDelivered) return undefined;
 		answerDelivered = false;
 		const transcript = transcriptFromSessionManager(ctx.sessionManager).inspect();

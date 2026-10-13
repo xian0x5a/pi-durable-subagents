@@ -227,6 +227,8 @@ type AgentCoordinatorView = HumanPresentationCoordinatorView & Readonly<{
 	reachSafeBoundary(): Promise<void>;
 	beginExecution(submissionSequence?: number): Promise<void>;
 	obligationFrames(): readonly ObligationFrame[];
+	/** Whether the Workflow shutdown fence has begun; never waits. */
+	isShuttingDown(): boolean;
 	/** Checks the Workflow shutdown fence and Run Suspension; never waits. */
 	assertNotShutDownOrSuspended(): void;
 	beginToolExecution(toolCallId: string, toolName: string): void;
@@ -852,6 +854,7 @@ export class WorkflowCoordinator {
 			},
 			beginExecution: (submissionSequence) =>
 				this.#beginExecution(agentId, submissionSequence),
+			isShuttingDown: () => this.#shuttingDown,
 			assertNotShutDownOrSuspended: () => this.#assertNotShutDownOrSuspended(agentId),
 			beginToolExecution: (toolCallId, toolName) => {
 				this.#assertAdmissionOpen();

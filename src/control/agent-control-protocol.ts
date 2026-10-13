@@ -797,7 +797,10 @@ export const agentControlProtocol = {
 				request: closed({ toolCallId: NonEmptyStringSchema, toolName: NonEmptyStringSchema }),
 				response: EmptyResponseSchema,
 			},
-			"runtime.safeBoundary": { request: EmptySchema, response: EmptyResponseSchema },
+			"runtime.safeBoundary": {
+				request: EmptySchema,
+				response: closed({ outcome: Type.Union([Type.Literal("reached"), Type.Literal("shutting_down")]) }),
+			},
 			"runtime.executionEnd": { request: EmptySchema, response: EmptyResponseSchema },
 			"coordination.observe": {
 				request: AgentObserveInputSchema,

@@ -175,7 +175,7 @@ function ownerHandlers(agentId: string, sessionPath: string, humanInput: () => v
 			humanInputSubmitted: async () => { humanInput(); return "continue"; },
 			primaryInputQueued: async () => {}, humanInputMode: async () => "agent",
 			toolResultCommitting: async () => undefined, rootToolExecutionStarted: async () => {},
-			safeBoundaryReached: async () => {}, executionEnded: async () => {},
+			safeBoundaryReached: async () => "reached" as const, executionEnded: async () => {},
 		},
 		coordination: {
 			agentTemplateSnapshot: async () => ({ templates: [] }), observe: unused, message: unused, wait: unused,

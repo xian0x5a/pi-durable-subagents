@@ -58,7 +58,7 @@ function handlers(currentFrames: () => readonly ObligationFrame[]): ParticipantL
 		async humanInputMode() { return "agent"; },
 		async toolResultCommitting() {},
 		async rootToolExecutionStarted() {},
-		async safeBoundaryReached() {},
+		async safeBoundaryReached() { return "reached"; },
 		async executionEnded() {},
 	};
 }
