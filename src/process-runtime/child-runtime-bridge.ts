@@ -20,7 +20,12 @@ import {
 import { installInteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
 import { VirtualModelRegistrar } from "../pi-integration/virtual-model-registration.ts";
-import { isPresetThinking, thinkingModeState } from "../pi-integration/recorded-model-selection.ts";
+import {
+	applyModelSelection,
+	presetEndedByLaterChange,
+	thinkingModeState,
+} from "../pi-integration/recorded-model-selection.ts";
+import { isVirtualModel } from "../policy/virtual-models.ts";
 import { installAgentActivityDock } from "../presentation/agent-activity-surface.ts";
 import {
 	type ParticipantLifecycleHandlers,
@@ -82,17 +87,18 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	const bootstrap = await readBootstrapDescriptor();
 	// The Owner launches children with PI_CODING_AGENT_DIR set to its own agent
 	// directory, and only this bridge is loaded, so the child registers its own.
-	await VirtualModelRegistrar.create(pi, hostPi.getAgentDir());
-	// Pi applies the launch selection before session_start binds the connection, and this
-	// extension never selects, so a later change is the user's (or an extension's). It
-	// ends preset mode, and the session records that so later Runtimes keep it. Leaving
-	// the model ends it too, so selecting the same name again through /model is explicit.
+	const virtualModels = await VirtualModelRegistrar.create(pi, hostPi.getAgentDir());
+	// Pi applies the launch selection before session_start binds the connection. A later
+	// change is the user's (or an extension's) unless it is a Spawner's, which records its
+	// own mode state. A manual change ends preset mode, and the session records that so
+	// later Runtimes keep it. Leaving the model ends it too, so selecting the same name
+	// again through /model is explicit.
 	const endPresetThinking = (
 		model: Readonly<{ provider: string; id: string }> | undefined,
 		ctx: hostPi.ExtensionContext,
 	) => {
 		const reference = model && { provider: model.provider, modelId: model.id };
-		if (!connection || !reference || !isPresetThinking(ctx.sessionManager.getBranch(), reference)) return;
+		if (!connection || !reference || !presetEndedByLaterChange(ctx.sessionManager.getBranch(), reference)) return;
 		pi.appendEntry(hostPi.VIRTUAL_MODEL_STATE_ENTRY, thinkingModeState(reference, "explicit"));
 	};
 	pi.on("thinking_level_select", (_event, ctx) => endPresetThinking(ctx.model, ctx));
@@ -212,6 +218,11 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 				runtime,
 				launchFacts: await readChildLaunchFacts(runtime, bootstrap.agentId),
 				participantLifecycle,
+				selectModel: async (selection) => {
+					// A Virtual Model defined after this process started is not registered yet.
+					if (isVirtualModel(selection.model)) await virtualModels.sync();
+					await applyModelSelection(runtime.session, selection);
+				},
 				hostShell: {
 					notify: (message, type) => ctx.ui.notify(message, type),
 					setPresentationVisible: capture.setPresentationVisible,

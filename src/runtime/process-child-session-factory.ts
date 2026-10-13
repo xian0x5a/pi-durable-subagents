@@ -17,7 +17,7 @@ import {
 	type RecordedModelSelection,
 } from "../pi-integration/recorded-model-selection.ts";
 import { clampThinkingToModelCapability } from "../pi-integration/model-thinking-capability.ts";
-import type { AgentSpawnInput } from "../protocol/agent-spawn-input.ts";
+import type { AgentSpawnInput, ModelSelectionInput } from "../protocol/agent-spawn-input.ts";
 import type { ChildAgentIdentity } from "../protocol/child-identity.ts";
 import {
 	isModeratorIdentity,
@@ -58,6 +58,10 @@ import {
 	type ResolvedParentRuntime,
 } from "./child-runtime-preparation.ts";
 import { workflowSessionDirectory } from "./workflow-session-directory.ts";
+import {
+	resolveModelSelection,
+	type ResolvedModelSelection,
+} from "../templates/agent-configuration.ts";
 import { isModelExcluded, modelIdentity } from "../policy/model-exclusion.ts";
 import {
 	isVirtualModel,
@@ -260,7 +264,7 @@ export class ProcessChildSessionFactory {
 		const host = AgentRuntimeSupervisor.createChild({
 			agentId: identity.agentId,
 			startSession: async () => {
-				const prepared = firstPreparation ?? await this.#keepSelectionRecorded(
+				const prepared = this.#currentFirstPreparation(firstPreparation, sessionPath) ?? await this.#keepSelectionRecorded(
 					identity,
 					sessionPath,
 					await this.prepareOrdinaryRun({
@@ -304,7 +308,7 @@ export class ProcessChildSessionFactory {
 		const host = AgentRuntimeSupervisor.createChild({
 			agentId: identity.agentId,
 			startSession: async () => {
-				const prepared = firstPreparation ?? await this.#keepSelectionRecorded(
+				const prepared = this.#currentFirstPreparation(firstPreparation, sessionPath) ?? await this.#keepSelectionRecorded(
 					identity,
 					sessionPath,
 					await this.prepareModeratorRun({
@@ -339,6 +343,35 @@ export class ProcessChildSessionFactory {
 			children: [],
 		};
 		return record;
+	}
+
+	/**
+	 * Validates a Spawner's later change exactly like a spawn's `config.model`.
+	 * "inherit" names the target's parent's current selection, captured now.
+	 */
+	async resolveModelChange(target: AgentRecord, model: ModelSelectionInput): Promise<ResolvedModelSelection> {
+		await this.#refreshVirtualModels();
+		const parentAgentId = isModeratorIdentity(target.identity)
+			? this.#ownerIdentity.agentId
+			: target.identity.directSpawnerAgentId;
+		const parent = parentAgentId === null ? undefined : this.#resolveAgent(parentAgentId);
+		if (!parent) throw new Error(`invariant_violation: Agent ${target.identity.agentId} parent is unavailable`);
+		const parentRuntime = await this.#resolveCurrentRuntime(parent, new Set());
+		return resolveModelSelection({
+			inherited: parentRuntime.configuration,
+			overrides: { model },
+			isModelAvailable: (candidate) => this.#isModelAvailable(candidate),
+			isModelExcluded: (candidate) => this.#modelExcluded(candidate),
+			clampThinking: (candidate, level) => this.#clampThinking(candidate, level),
+			presetThinking: (candidate) => this.#presetThinking(candidate),
+		});
+	}
+
+	/** Records a selection for an Agent without a Runtime process; its next Runtime starts on it. */
+	recordModelChange(target: AgentRecord, selection: ResolvedModelSelection): void {
+		const sessionPath = target.transcript.inspect().transcriptPath;
+		if (sessionPath === null) throw new Error(`invariant_violation: Agent ${target.identity.agentId} session is not file-backed`);
+		recordModelSelection(SessionManager.open(sessionPath), selection);
 	}
 
 	workflowSessionDirectory(): string {
@@ -541,21 +574,30 @@ export class ProcessChildSessionFactory {
 		prepared: Prepared,
 	): Prepared {
 		const recorded = recordedSelectionAt(sessionPath);
-		const { model, thinking, presetThinking } = prepared.configuration;
-		const selection: RecordedModelSelection = {
-			model,
-			...(thinking === undefined ? {} : { thinking }),
-			...(presetThinking ? { presetThinking } : {}),
-		};
+		const selection = preparedSelection(prepared);
 		if (sameModelSelection(recorded, selection)) return prepared;
 		recordModelSelection(SessionManager.open(sessionPath), selection);
-		if (recorded !== undefined && modelIdentity(recorded.model) !== modelIdentity(model)) {
+		if (recorded !== undefined && modelIdentity(recorded.model) !== modelIdentity(selection.model)) {
 			this.#ownerRuntime.session.extensionRunner.getUIContext().notify(
-				`${identity.metadata.label} · ${identity.agentId.slice(-8)} cannot resume ${modelIdentity(recorded.model)} (unavailable or excluded by model policy); it now uses ${modelIdentity(model)}.`,
+				`${identity.metadata.label} · ${identity.agentId.slice(-8)} cannot resume ${modelIdentity(recorded.model)} (unavailable or excluded by model policy); it now uses ${modelIdentity(selection.model)}.`,
 				"warning",
 			);
 		}
 		return prepared;
+	}
+
+	/**
+	 * The creation's preparation launches the first Runtime unless the session has
+	 * recorded another selection since, such as a Spawner's change to a queued child.
+	 */
+	#currentFirstPreparation<Prepared extends PreparedChildRuntime>(
+		firstPreparation: Prepared | undefined,
+		sessionPath: string,
+	): Prepared | undefined {
+		return firstPreparation !== undefined &&
+			sameModelSelection(recordedSelectionAt(sessionPath), preparedSelection(firstPreparation))
+			? firstPreparation
+			: undefined;
 	}
 
 	#resolveCurrentOwnerRuntime(): ResolvedParentRuntime {
@@ -697,6 +739,15 @@ export class ProcessChildSessionFactory {
 			path === INLINE_PUBLIC_EXTENSION_PATH ||
 			COORDINATION_EXTENSION_PREFIXES.some((prefix) => path.startsWith(prefix));
 	}
+}
+
+function preparedSelection(prepared: PreparedChildRuntime): RecordedModelSelection {
+	const { model, thinking, presetThinking } = prepared.configuration;
+	return {
+		model,
+		...(thinking === undefined ? {} : { thinking }),
+		...(presetThinking ? { presetThinking } : {}),
+	};
 }
 
 function recordedSelectionAt(session: string | AgentRecord["transcript"]): RecordedModelSelection | undefined {

@@ -17,6 +17,7 @@ import { participant } from "./support/request-history.ts";
 import { resumeWorkflow } from "../src/coordination/workflow-resume.ts";
 import type { WorkflowResumeActivation } from "../src/coordination/workflow-recovery-outcomes.ts";
 import { requestCoordination } from "./support/request-coordination.ts";
+import { unusedModelChanges } from "./support/model-change-factory.ts";
 
 test("recovery schedules original Requests and Messages once, preserving context preparation", { timeout: 5_000 }, async t => {
 	const h = harness(t);
@@ -286,7 +287,7 @@ test("recovery coalesces live resume reservations outside ordinary capacity", { 
 	await h.message(h.requester, "ordinary", { operation: "send", targetAgent: "responder", content: "Fill ordinary capacity" });
 	const input = { operation: "resume" as const, agentId: "responder", content: "Reserved direction" };
 	call(h.requester, "supervisory", "agent_control", input);
-	const supervisor = new RunSupervisor({
+	const supervisor = new RunSupervisor({ models: unusedModelChanges,
 		agents: new Map([h.requester, h.responder].map(p => [p.record.identity.agentId, p.record])),
 		ownerAgentId: "requester", messages: h.messages,
 	});
@@ -473,7 +474,7 @@ test("nested cyclic recovery finalizes recipient-relative views before dispatch 
 	assert.ok("requestMessageId" in outer && "requestMessageId" in inner && "requestMessageId" in reverse);
 	h.responder.stop(); h.worker.stop();
 	await h.recover();
-	const supervisor = new RunSupervisor({ agents: h.agents, ownerAgentId: "requester", messages: h.messages });
+	const supervisor = new RunSupervisor({ models: unusedModelChanges, agents: h.agents, ownerAgentId: "requester", messages: h.messages });
 	let admissions = 0;
 	const receipt = await resumeWorkflow({
 		workflowId: "requester", ownerAgentId: "requester", agents: h.agents, messages: h.messages, quarantinedAgentIds: new Set(),
@@ -505,7 +506,7 @@ test("scoped recovery reports held and failed admissions without claiming contin
 		h.responder.stop(); await h.recover();
 		if (failure === "held") h.responder.blocked = true;
 		else h.responder.record.host.startInLane = async () => { throw new Error("runtime unavailable"); };
-		const supervisor = new RunSupervisor({ agents: h.agents, ownerAgentId: "requester", messages: h.messages });
+		const supervisor = new RunSupervisor({ models: unusedModelChanges, agents: h.agents, ownerAgentId: "requester", messages: h.messages });
 		const receipt = await resumeWorkflow({
 			workflowId: "requester", ownerAgentId: "requester", agents: h.agents, messages: h.messages, quarantinedAgentIds: new Set(),
 			activate: async (record, requestIds, recovery) => {
@@ -528,7 +529,7 @@ test("a later activation failure still releases earlier continuations with truth
 	const inner = await h.message(h.responder, "release-inner", { title: "Fixture request", operation: "request", targetAgent: "worker", question: "Inner" });
 	assert.ok("requestMessageId" in inner);
 	h.responder.stop(); h.worker.stop(); await h.recover();
-	const supervisor = new RunSupervisor({ agents: h.agents, ownerAgentId: "requester", messages: h.messages });
+	const supervisor = new RunSupervisor({ models: unusedModelChanges, agents: h.agents, ownerAgentId: "requester", messages: h.messages });
 	const receipt = await resumeWorkflow({
 		workflowId: "requester", ownerAgentId: "requester", agents: h.agents, messages: h.messages, quarantinedAgentIds: new Set(),
 		activate: async (record, requestIds, recovery) => {
@@ -549,7 +550,7 @@ test("cancellation while continuation is gated suppresses stale runtime input", 
 	const request = await h.message(h.requester, "gated-cancel", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Work" });
 	assert.ok("requestMessageId" in request);
 	h.responder.stop(); await h.recover();
-	const supervisor = new RunSupervisor({ agents: h.agents, ownerAgentId: "requester", messages: h.messages });
+	const supervisor = new RunSupervisor({ models: unusedModelChanges, agents: h.agents, ownerAgentId: "requester", messages: h.messages });
 	await resumeWorkflow({
 		workflowId: "requester", ownerAgentId: "requester", agents: h.agents, messages: h.messages, quarantinedAgentIds: new Set(),
 		activate: async (record, requestIds, recovery) => {
@@ -573,7 +574,7 @@ test("unavailable outbound targets do not erase verified responder recovery", { 
 		}
 		await h.recover();
 		h.worker.record.transcript.refresh = async () => { throw new Error("worker transcript unreadable"); };
-		const supervisor = new RunSupervisor({ agents: h.agents, ownerAgentId: "requester", messages: h.messages });
+		const supervisor = new RunSupervisor({ models: unusedModelChanges, agents: h.agents, ownerAgentId: "requester", messages: h.messages });
 		const receipt = await resumeWorkflow({
 			workflowId: "requester", ownerAgentId: "requester", agents: h.agents, messages: h.messages, quarantinedAgentIds: new Set(),
 			activate: async (record, requestIds, recovery) => {
@@ -602,7 +603,7 @@ test("recovery releases every admitted recipient before reporting partial dispat
 	await h.message(h.requester, "release-failure-outer", { title: "Fixture request", operation: "request", targetAgent: "responder", question: "Outer" });
 	await h.message(h.responder, "release-failure-inner", { title: "Fixture request", operation: "request", targetAgent: "worker", question: "Inner" });
 	h.responder.stop(); h.worker.stop(); await h.recover();
-	const supervisor = new RunSupervisor({ agents: h.agents, ownerAgentId: "requester", messages: h.messages });
+	const supervisor = new RunSupervisor({ models: unusedModelChanges, agents: h.agents, ownerAgentId: "requester", messages: h.messages });
 	const released: string[] = [];
 	const release = h.messages.deliveryEligibilityChanged.bind(h.messages);
 	h.messages.deliveryEligibilityChanged = record => {
@@ -636,7 +637,7 @@ test("non-Request recovery failures surface after admitted responders are releas
 			await h.message(h.requester, "non-request-message", { operation: "send", targetAgent: "worker", content: "Pending instruction" });
 		}
 		h.responder.stop(); await h.recover();
-		const supervisor = new RunSupervisor({ agents: h.agents, ownerAgentId: "requester", messages: h.messages });
+		const supervisor = new RunSupervisor({ models: unusedModelChanges, agents: h.agents, ownerAgentId: "requester", messages: h.messages });
 		if (stage === "admission") {
 			const resume = h.messages.resumeMessage.bind(h.messages);
 			h.messages.resumeMessage = async message => {

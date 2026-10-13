@@ -59,10 +59,7 @@ export type AgentRunLaunchConfiguration = Readonly<
 /** Prepared rules before the child-owned skill discovery contributes the loaded set. */
 export type ResolvedAgentRunConfiguration = Omit<EffectiveAgentRunConfiguration, "skills">;
 
-export function resolveAgentRunConfiguration(options: {
-	inherited: InheritableRuntimeConfiguration;
-	template?: Exclude<AgentCreationPreset, null>;
-	overrides?: AgentSpawnConfigurationInput;
+type ModelSelectionPredicates = Readonly<{
 	isModelAvailable(model: ModelReference): boolean;
 	/** Reported separately so a policy exclusion is never blamed on availability. */
 	isModelExcluded?(model: ModelReference): boolean;
@@ -70,6 +67,19 @@ export function resolveAgentRunConfiguration(options: {
 	clampThinking?(model: ModelReference, level: RuntimeThinkingLevel): RuntimeThinkingLevel;
 	/** The level of a Virtual Model's first usable entry, which a preset selection starts on. */
 	presetThinking?(model: ModelReference): RuntimeThinkingLevel;
+}>;
+
+/** The model and the level it will really run; preset mode names its first entry's level. */
+export type ResolvedModelSelection = Readonly<{
+	model: ModelReference;
+	thinking: RuntimeThinkingLevel;
+	presetThinking?: true;
+}>;
+
+export function resolveAgentRunConfiguration(options: ModelSelectionPredicates & {
+	inherited: InheritableRuntimeConfiguration;
+	template?: Exclude<AgentCreationPreset, null>;
+	overrides?: AgentSpawnConfigurationInput;
 	/** The Agent's usable recorded selection, which replaces the initial values. */
 	recorded?: RecordedModelSelection;
 }): ResolvedAgentRunConfiguration {
@@ -94,6 +104,32 @@ export function resolveAgentRunConfiguration(options: {
 	const loadContextFiles = overrides?.loadContextFiles
 		?? template?.loadContextFiles
 		?? true;
+	const { model, thinking, presetThinking } = resolveModelSelection(options);
+
+	return {
+		cwd: resolve(inherited.cwd, overrides?.cwd ?? inherited.cwd),
+		model: { ...model },
+		thinking,
+		excludeTools,
+		excludeSkills,
+		extensions: [...configuredExtensions],
+		...(systemPrompt === undefined ? {} : { systemPrompt }),
+		loadContextFiles,
+		...(presetThinking ? { presetThinking } : {}),
+	};
+}
+
+/**
+ * Resolves a model selection the way a spawn does. A Spawner's later change passes
+ * its `{ id, thinking }` pair as `overrides.model`, so it is validated identically.
+ */
+export function resolveModelSelection(options: ModelSelectionPredicates & {
+	inherited: Readonly<{ model: ModelReference; thinking: RuntimeThinkingLevel }>;
+	template?: Exclude<AgentCreationPreset, null>;
+	overrides?: Pick<AgentSpawnConfigurationInput, "model">;
+	recorded?: RecordedModelSelection;
+}): ResolvedModelSelection {
+	const { inherited, template, overrides } = options;
 	// A recorded selection is the Agent's current one; Spawn and Template values only
 	// supply the first selection, so they are not consulted at all once one exists.
 	const modelConfiguration = options.recorded === undefined
@@ -114,24 +150,17 @@ export function resolveAgentRunConfiguration(options: {
 	// and the recorded configuration must both name the level it will really run.
 	const thinking = options.clampThinking?.(modelConfiguration.model, selectedThinking)
 		?? selectedThinking;
-
 	return {
-		cwd: resolve(inherited.cwd, overrides?.cwd ?? inherited.cwd),
-		model: { ...modelConfiguration.model },
+		model: modelConfiguration.model,
 		thinking,
-		excludeTools,
-		excludeSkills,
-		extensions: [...configuredExtensions],
-		...(systemPrompt === undefined ? {} : { systemPrompt }),
-		loadContextFiles,
 		...(presetThinking ? { presetThinking: true } : {}),
 	};
 }
 
 function resolveInitialModelConfiguration(
-	inherited: InheritableRuntimeConfiguration,
+	inherited: Readonly<{ model: ModelReference; thinking: RuntimeThinkingLevel }>,
 	template: Exclude<AgentCreationPreset, null> | undefined,
-	overrides: AgentSpawnConfigurationInput | undefined,
+	overrides: Pick<AgentSpawnConfigurationInput, "model"> | undefined,
 	options: Readonly<{
 		isModelAvailable(model: ModelReference): boolean;
 		isModelExcluded?(model: ModelReference): boolean;

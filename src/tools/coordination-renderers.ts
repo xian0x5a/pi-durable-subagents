@@ -282,6 +282,7 @@ export function renderAgentControlCall(
 		args.operation,
 		formatAgentIdentity(args.agentId, resolveAgentLabel, expanded ? "full" : "compact"),
 		args.operation === "resume" ? boundedToolPreview(args.content) : undefined,
+		args.operation === "set_model" ? `${args.model.id} · ${args.model.thinking}` : undefined,
 	]);
 }
 
@@ -310,7 +311,7 @@ export function renderAgentControlResult(
 			details.agentId,
 			resolveAgentLabel,
 			options.expanded ? "full" : "compact",
-		)}`,
+		)}${"model" in details ? ` · ${details.model.id} · ${details.thinkingLevel}` : ""}`,
 	);
 }
 

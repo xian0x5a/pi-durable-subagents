@@ -10,6 +10,8 @@ import {
 	type ToolCallPointer,
 } from "./identities.ts";
 import type { Message } from "./message.ts";
+import { validateModelSelectionInput, type ModelSelectionInput } from "./agent-spawn-input.ts";
+import type { RuntimeThinkingLevel } from "./runtime-configuration.ts";
 
 export type RunControlInput =
 	| Readonly<{
@@ -24,6 +26,11 @@ export type RunControlInput =
 	| Readonly<{
 		operation: "abort";
 		agentId: string;
+	}>
+	| Readonly<{
+		operation: "set_model";
+		agentId: string;
+		model: ModelSelectionInput;
 	}>;
 
 export type RunInterruptionReceipt = Readonly<{
@@ -58,10 +65,24 @@ export type RunAbortReceipt = Readonly<{
 	callerOutstandingRequests: readonly CallerOutstandingRequest[];
 }>;
 
+/**
+ * "applied": the live Runtime switched; its next provider request uses the selection.
+ * "recorded": the Agent has no Runtime; its next Runtime starts on the selection.
+ */
+export type RunModelSelectionReceipt = Readonly<{
+	agentId: string;
+	disposition: "applied" | "recorded";
+	/** The selection with "inherit" resolved; "preset" stays preset. */
+	model: Readonly<{ id: string; thinking: RuntimeThinkingLevel | "preset" }>;
+	/** The level the next request runs: clamped to the model, or the preset entry's level. */
+	thinkingLevel: RuntimeThinkingLevel;
+}>;
+
 export type RunControlReceipt =
 	| RunInterruptionReceipt
 	| RunResumeReceipt
-	| RunAbortReceipt;
+	| RunAbortReceipt
+	| RunModelSelectionReceipt;
 
 export function validateRunControlInput(value: unknown): RunControlInput {
 	if (!isRecord(value)) throw new CoordinationRecordValidationError("invalid_input: Run control input must be an object");
@@ -81,6 +102,9 @@ export function validateRunControlInput(value: unknown): RunControlInput {
 		value.content.trim().length > 0
 	) {
 		return { operation: "resume", agentId: value.agentId, content: value.content };
+	}
+	if (value.operation === "set_model" && Object.keys(value).length === 3) {
+		return { operation: "set_model", agentId: value.agentId, model: validateModelSelectionInput(value.model) };
 	}
 	throw new CoordinationRecordValidationError("invalid_input: invalid Run control input");
 }
@@ -129,8 +153,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function sameRunControlInput(left: RunControlInput, right: RunControlInput): boolean {
 	if (left.operation !== right.operation || left.agentId !== right.agentId) return false;
-	return left.operation !== "resume" ||
-		(right.operation === "resume" && left.content === right.content);
+	if (left.operation === "resume") return right.operation === "resume" && left.content === right.content;
+	if (left.operation === "set_model") {
+		return right.operation === "set_model" &&
+			left.model.id === right.model.id &&
+			left.model.thinking === right.model.thinking;
+	}
+	return true;
 }
 
 /** Resume authors a Message; interrupt and abort do not. */

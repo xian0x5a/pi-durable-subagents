@@ -12,6 +12,7 @@ import type {
 } from "../protocol/message-delivery.ts";
 import type { ContextPreparation } from "../policy/working-zone-preparation.ts";
 import type { ModelVisibleModeratorRoutineStart } from "../protocol/moderator-input.ts";
+import type { ResolvedModelSelection } from "../templates/agent-configuration.ts";
 import type { ModelVisibleObligationReminder } from "../protocol/obligation-reminder.ts";
 import type {
 	ModelReference,
@@ -212,6 +213,8 @@ export interface AgentRuntimeHost {
 	cancelIsolatedResumptionInLane(hold: RunResumptionHandle): void;
 	finishIsolatedResumptionInLane(handle: AgentRunHandle): void;
 	interruptCurrentRunInLane(): Promise<"held" | "already_held" | "not_running">;
+	/** Undefined when the Agent has no Runtime process to apply the selection to. */
+	selectModelInLane(selection: ResolvedModelSelection): Promise<EffectiveRuntimeSnapshot | undefined>;
 	prepareInterruption(): void;
 	beginInputRequired(handle: AgentRunHandle, requestId: string): void;
 	acceptsInputRequired(handle: AgentRunHandle, requestId: string): boolean;

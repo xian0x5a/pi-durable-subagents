@@ -114,6 +114,11 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 		return this.#driver.abort();
 	}
 
+	selectModel(): Promise<void> {
+		// Only the Owner runs in process, and no Agent controls the Owner's Run.
+		return Promise.reject(new Error("invariant_violation: the Owner Runtime takes no Spawner model selection"));
+	}
+
 	waitForIdle(): Promise<void> {
 		return this.#driver.waitForIdle();
 	}

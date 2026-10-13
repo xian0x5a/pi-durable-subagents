@@ -3,7 +3,7 @@ import type { MessageEndEvent } from "@earendil-works/pi-coding-agent";
 
 import type { AgentStatus } from "../coordination/agent-record.ts";
 import { NATIVE_RUN_OUTCOMES, type NativeRunEnd } from "../pi-integration/native-session-driver.ts";
-import { RuntimeThinkingSchema } from "../protocol/runtime-thinking-schema.ts";
+import { CandidateThinkingSchema, RuntimeThinkingSchema } from "../protocol/runtime-thinking-schema.ts";
 import type { AgentControlProtocol, DeepReadonly } from "./agent-control-channel.ts";
 import { bindEquivalent, bindPiOwned, bindToolInput } from "./schema-conformance.ts";
 import type { AgentMessageReceipt } from "../coordination/message-receipts.ts";
@@ -448,6 +448,12 @@ const RunControlReceiptSchema = bindEquivalent<RunControlReceipt>()(Type.Union([
 		disposition: Type.Union([Type.Literal("aborted"), Type.Literal("not_running")]),
 		residualRequests: closed({ incoming: Type.Integer({ minimum: 0 }), outgoing: Type.Integer({ minimum: 0 }) }),
 		callerOutstandingRequests: Type.Array(closed({ requestMessageId: NonEmptyStringSchema, title: NonEmptyStringSchema })),
+	}),
+	closed({
+		agentId: NonEmptyStringSchema,
+		disposition: Type.Union([Type.Literal("applied"), Type.Literal("recorded")]),
+		model: closed({ id: NonEmptyStringSchema, thinking: CandidateThinkingSchema }),
+		thinkingLevel: RuntimeThinkingSchema,
 	}),
 ]));
 const AgentWaitAnswerSchema = Type.Union([
@@ -933,6 +939,14 @@ export const agentControlProtocol = {
 			"run.interrupt": {
 				request: closed({ runId: NonEmptyStringSchema }),
 				response: AcknowledgementSchema,
+			},
+			"model.select": {
+				request: closed({
+					model: closed({ provider: NonEmptyStringSchema, modelId: NonEmptyStringSchema }),
+					thinking: RuntimeThinkingSchema,
+					presetThinking: Type.Boolean(),
+				}),
+				response: EmptyResponseSchema,
 			},
 			"presentation.setVisible": {
 				request: closed({ visible: Type.Boolean() }),

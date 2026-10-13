@@ -6,6 +6,7 @@
  */
 import {
 	VIRTUAL_MODEL_STATE_ENTRY,
+	type AgentSession,
 	type SessionEntry,
 	type SessionManager,
 	type VirtualModelStateData,
@@ -17,6 +18,7 @@ import {
 	type ModelReference,
 	type RuntimeThinkingLevel,
 } from "../protocol/runtime-configuration.ts";
+import type { ResolvedModelSelection } from "../templates/agent-configuration.ts";
 
 export type RecordedModelSelection = Readonly<{
 	model: ModelReference;
@@ -58,13 +60,30 @@ export function isPresetThinking(
 	model: ModelReference,
 ): boolean {
 	if (!isVirtualModel(model)) return false;
-	const state = branch.findLast((entry) => {
-		if (entry.type !== "custom" || entry.customType !== VIRTUAL_MODEL_STATE_ENTRY) return false;
-		const data = entry.data as Partial<VirtualModelStateData> | undefined;
-		return data?.provider === model.provider && data.modelId === model.modelId;
-	});
+	const state = branch.findLast((entry) => isModeStateFor(entry, model));
 	const data = state?.type === "custom" ? state.data as VirtualModelStateData<Partial<ThinkingModeState>> : undefined;
 	return data?.state?.thinking === "preset";
+}
+
+/**
+ * Whether a select event ends preset mode. Pi records a manual change before it emits
+ * the event, so a change entry then follows the mode state. A Spawner's change records
+ * its mode state last, so its own events, which Pi may deliver late, change nothing.
+ */
+export function presetEndedByLaterChange(
+	branch: readonly SessionEntry[],
+	model: ModelReference,
+): boolean {
+	if (!isPresetThinking(branch, model)) return false;
+	const stateIndex = branch.findLastIndex((entry) => isModeStateFor(entry, model));
+	return branch.slice(stateIndex + 1)
+		.some((entry) => entry.type === "model_change" || entry.type === "thinking_level_change");
+}
+
+function isModeStateFor(entry: SessionEntry, model: ModelReference): boolean {
+	if (entry.type !== "custom" || entry.customType !== VIRTUAL_MODEL_STATE_ENTRY) return false;
+	const data = entry.data as Partial<VirtualModelStateData> | undefined;
+	return data?.provider === model.provider && data.modelId === model.modelId;
 }
 
 export function thinkingModeState(
@@ -86,6 +105,28 @@ export function recordModelSelection(
 		session.appendCustomEntry(
 			VIRTUAL_MODEL_STATE_ENTRY,
 			thinkingModeState(selection.model, selection.presetThinking ? "preset" : "explicit"),
+		);
+	}
+}
+
+/**
+ * Applies a Spawner's validated selection to a live session, as `/model` would.
+ * The mode state is written last so the preset heuristic does not read the
+ * change as a manual one (see presetEndedByLaterChange).
+ */
+export async function applyModelSelection(
+	session: AgentSession,
+	{ model, thinking, presetThinking }: ResolvedModelSelection,
+): Promise<void> {
+	const target = session.modelRuntime.getModel(model.provider, model.modelId);
+	if (!target) throw new Error(`Model ${model.provider}/${model.modelId} is not available in this Runtime`);
+	const current = session.model;
+	if (current?.provider !== model.provider || current.id !== model.modelId) await session.setModel(target);
+	session.setThinkingLevel(thinking);
+	if (isVirtualModel(model)) {
+		session.sessionManager.appendCustomEntry(
+			VIRTUAL_MODEL_STATE_ENTRY,
+			thinkingModeState(model, presetThinking ? "preset" : "explicit"),
 		);
 	}
 }

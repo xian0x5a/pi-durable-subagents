@@ -122,6 +122,7 @@ const AGENT_CONTROL_PROMPT_GUIDE = `<agent_control>
 Choose by intent:
 - Pause a Run to redirect it: operation "interrupt", then "resume" with new instructions.
 - Stop what an Agent is doing now: operation "abort". It ends only the current Run. The Agent, its Requests, and its descendants remain, and a later Message starts a successor Run.
+- Change a child's model or thinking without losing its context: operation "set_model" with the same model pair as agent_spawn config.model. A running child switches at its next model request; a child without a Runtime starts its next one on it. The receipt names the selection and the thinking level it runs.
 - Withdraw work you no longer need: agent_message operation "cancel" on your Request. Abort never cancels Requests, so aborted work you authored stays outstanding until you cancel it or it is answered.
 
 An abort receipt's callerOutstandingRequests lists your unresolved Requests to that Agent; residualRequests counts all of that Agent's unresolved incoming and outgoing Requests. A queued child has no Run, so abort reports "not_running" and the child still boots later unless you cancel its Creation Request.
@@ -261,27 +262,27 @@ const agentWaitParameters = Type.Object({
 	})),
 }, { additionalProperties: false });
 
+/** The `{ id, thinking }` pair a spawn starts a child on and a Spawner later changes it to. */
+const modelSelectionParameters = (description: string) => Type.Object(
+	{
+		id: Type.Union([
+			Type.String({ pattern: "^[^/]+/.+$" }),
+			Type.Literal("inherit"),
+		], { description: 'The child model as provider/model, or "inherit" for the parent model.' }),
+		thinking: Type.Union([
+			RuntimeThinkingSchema,
+			Type.Literal("inherit"),
+			Type.Literal("preset"),
+		], { description: 'The child thinking level, "inherit" for the parent thinking level, or "preset" (only with a virtual/<name> id) to use each virtual model entry\'s own level. Pi resolves a level the selected model cannot run to its nearest supported level.' }),
+	},
+	{ additionalProperties: false, description },
+);
+
 const agentSpawnConfigurationParameters = Type.Object(
 	{
-		model: Type.Optional(
-			Type.Object(
-				{
-					id: Type.Union([
-						Type.String({ pattern: "^[^/]+/.+$" }),
-						Type.Literal("inherit"),
-					], { description: 'The child model as provider/model, or "inherit" for the parent model.' }),
-					thinking: Type.Union([
-						RuntimeThinkingSchema,
-						Type.Literal("inherit"),
-						Type.Literal("preset"),
-					], { description: 'The child thinking level, "inherit" for the parent thinking level, or "preset" (only with a virtual/<name> id) to use each virtual model entry\'s own level. Pi resolves a level the selected model cannot run to its nearest supported level.' }),
-				},
-				{
-					additionalProperties: false,
-					description: "One atomic model selection: give id and thinking together, or omit config.model to accept the Template candidate pair or the parent pair.",
-				},
-			),
-		),
+		model: Type.Optional(modelSelectionParameters(
+			"One atomic model selection: give id and thinking together, or omit config.model to accept the Template candidate pair or the parent pair.",
+		)),
 		cwd: Type.Optional(Type.String({ minLength: 1 })),
 		excludeTools: Type.Optional(
 			Type.Array(Type.String({ minLength: 1 }), {
@@ -442,6 +443,16 @@ const agentControlParameters = objectRootUnion(Type.Union([
 		{
 			operation: Type.Literal("abort"),
 			agentId: Type.String({ minLength: 1 }),
+		},
+		{ additionalProperties: false },
+	),
+	Type.Object(
+		{
+			operation: Type.Literal("set_model"),
+			agentId: Type.String({ minLength: 1 }),
+			model: modelSelectionParameters(
+				"The new model selection, validated like agent_spawn config.model. The parent is the child's Direct Spawner.",
+			),
 		},
 		{ additionalProperties: false },
 	),
@@ -676,7 +687,7 @@ export const agentControlEntry = defineCoordinationTool({
 	name: "agent_control",
 	label: "Control Agent Run",
 	description:
-		"Interrupt, explicitly resume, or abort one authorized exact Agent Run.",
+		"Interrupt, explicitly resume, or abort one authorized exact Agent Run, or change its Agent's model and thinking.",
 	promptSnippet: {
 		default: "Supervise an immediate child Run, or any non-Owner Run when acting as Workflow Owner.",
 		moderator: "Supervise any current non-Owner Run needed to restore safe progress.",

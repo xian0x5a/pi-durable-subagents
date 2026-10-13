@@ -6,7 +6,7 @@
 // Version 11 adds the required Workflow interaction, which withholds ask_user headless.
 // Version 13 adds Virtual Model preset thinking to the bootstrap and catalogue candidates.
 // Version 14 removes preset thinking from the bootstrap: the child's session records it.
-export const AGENT_CONTROL_PROTOCOL_VERSION = 14 as const;
+export const AGENT_CONTROL_PROTOCOL_VERSION = 15 as const;
 
 const NonEmptyStringSchema = { type: "string", minLength: 1 } as const;
 

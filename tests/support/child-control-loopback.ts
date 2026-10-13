@@ -5,6 +5,7 @@ import { agentControlProtocol, type OwnerToChildControl } from "../../src/contro
 import { AGENT_CONTROL_PROTOCOL_VERSION } from "../../src/control/control-protocol-schemas.ts";
 import { createInMemoryControlTransportPair } from "../../src/control/in-memory-control-transport.ts";
 import { registerParticipantLifecycle } from "../../src/pi-integration/participant-lifecycle.ts";
+import { applyModelSelection } from "../../src/pi-integration/recorded-model-selection.ts";
 import { registerChildBindingHooks } from "../../src/process-runtime/child-binding-hooks.ts";
 import {
 	ChildControlConnection,
@@ -138,6 +139,7 @@ export async function createChildControlLoopback(
 			bridgeExtensionPath: undefined,
 		},
 		participantLifecycle,
+		selectModel: (selection) => applyModelSelection(host.runtime.session, selection),
 		hostShell: {
 			notify: (message, type) => notices.push({ message, type }),
 			setPresentationVisible: (visible) => visibility.push(visible),

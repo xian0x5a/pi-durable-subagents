@@ -15,8 +15,13 @@ import {
 	type RunAbortReceipt,
 	type RunControlInput,
 	type RunControlReceipt,
+	type RunModelSelectionReceipt,
 } from "../protocol/run-control.ts";
 import { isModeratorIdentity } from "../protocol/moderator-input.ts";
+import type { ProcessChildSessionFactory } from "../runtime/process-child-session-factory.ts";
+import { modelIdentity } from "../policy/model-exclusion.ts";
+
+type ModelChangeFactory = Pick<ProcessChildSessionFactory, "resolveModelChange" | "recordModelChange">;
 
 export class RunSupervisor {
 	// Accepted custom input owns continuation even while dispatch is still queued.
@@ -24,6 +29,7 @@ export class RunSupervisor {
 	readonly #agents: Map<string, AgentRecord>;
 	readonly #ownerAgentId: string;
 	readonly #messages: MessageCoordinator;
+	readonly #models: ModelChangeFactory;
 	readonly #quarantinedAgentIds: ReadonlySet<string>;
 
 	constructor(options: {
@@ -31,8 +37,10 @@ export class RunSupervisor {
 		quarantinedAgentIds?: ReadonlySet<string>;
 		ownerAgentId: string;
 		messages: MessageCoordinator;
+		models: ModelChangeFactory;
 	}) {
 		this.#agents = options.agents;
+		this.#models = options.models;
 		this.#quarantinedAgentIds = options.quarantinedAgentIds ?? new Set();
 		this.#ownerAgentId = options.ownerAgentId;
 		this.#messages = options.messages;
@@ -52,6 +60,7 @@ export class RunSupervisor {
 		});
 		const control = committed.input;
 		const target = this.#requireControllableTarget(callerAgentId, control.agentId);
+		if (control.operation === "set_model") return this.#selectModel(target, control.model);
 		const residualRequestsBeforeCancellation = target.host.residualRequestCounts();
 		const startingProjection = control.operation === "abort" &&
 			target.host.observe().phase === "starting"
@@ -131,6 +140,27 @@ export class RunSupervisor {
 		return control.operation === "resume"
 			? target.host.waitForSuspendedRunToSettle().then(runInLane)
 			: runInLane();
+	}
+
+	async #selectModel(
+		target: AgentRecord,
+		model: Extract<RunControlInput, { operation: "set_model" }>["model"],
+	): Promise<RunModelSelectionReceipt> {
+		// Validation needs no lane; failing here leaves the Agent untouched.
+		const selection = await this.#models.resolveModelChange(target, model);
+		return target.host.lane.run(async () => {
+			const snapshot = await target.host.selectModelInLane(selection);
+			if (!snapshot) this.#models.recordModelChange(target, selection);
+			return {
+				agentId: target.identity.agentId,
+				disposition: snapshot ? "applied" : "recorded",
+				model: {
+					id: modelIdentity(selection.model),
+					thinking: selection.presetThinking ? "preset" : selection.thinking,
+				},
+				thinkingLevel: snapshot?.thinking ?? selection.thinking,
+			};
+		});
 	}
 
 	/** Admit recovery through ordinary scheduling; admission is not turn completion. */

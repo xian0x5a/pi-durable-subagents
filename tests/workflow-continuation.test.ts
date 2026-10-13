@@ -7,6 +7,7 @@ import type { MessageCoordinator } from "../src/coordination/messages.ts";
 import type { ScheduledCustomDelivery } from "../src/coordination/message-delivery-scheduler.ts";
 import { RunSupervisor } from "../src/coordination/run-supervision.ts";
 import { SerialLane } from "../src/runtime/serial-lane.ts";
+import { unusedModelChanges } from "./support/model-change-factory.ts";
 
 function harness() {
 	let handle: { sequence: number } | undefined;
@@ -31,7 +32,7 @@ function harness() {
 			async releaseIfEligibleInLane() {},
 		},
 	} as unknown as AgentRecord;
-	const supervisor = new RunSupervisor({
+	const supervisor = new RunSupervisor({ models: unusedModelChanges,
 		agents: new Map([["child", record]]),
 		ownerAgentId: "owner",
 		messages: {

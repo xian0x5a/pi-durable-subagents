@@ -17,6 +17,7 @@ import type {
 } from "../src/runtime/agent-runtime-host.ts";
 import { SerialLane } from "../src/runtime/serial-lane.ts";
 import { AgentTranscript, type TranscriptInspection } from "../src/transcript/agent-transcript.ts";
+import { unusedModelChanges } from "./support/model-change-factory.ts";
 
 const ABORT_WAIT_MS = 100;
 
@@ -94,7 +95,7 @@ test("abort cancels a selected starting Run before its occupied lane", async () 
 			metadata: { label: "Starting Target" },
 		}, targetHost, emptyTranscript(targetAgentId))],
 	]);
-	const supervisor = new RunSupervisor({
+	const supervisor = new RunSupervisor({ models: unusedModelChanges,
 		agents,
 		ownerAgentId: "owner",
 		messages,

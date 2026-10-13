@@ -12,6 +12,7 @@ import type {
 	HostedAgentRuntime,
 	HostedRuntimeEvent,
 } from "../runtime/hosted-agent-runtime.ts";
+import type { ResolvedModelSelection } from "../templates/agent-configuration.ts";
 import type { HostedAgentProjection } from "../runtime/hosted-agent-projection.ts";
 import type {
 	PiChildRuntimeChannel,
@@ -266,6 +267,17 @@ export class PiChildHostedRuntime implements HostedAgentRuntime {
 			...deliveryIds.map(deliveryId => runtime.channel.request("message.cancel", { deliveryId })),
 			...(runId ? [runtime.channel.request("run.interrupt", { runId })] : []),
 		]);
+	}
+
+	async selectModel(selection: ResolvedModelSelection): Promise<void> {
+		const runtime = await this.#admitted;
+		await runtime.channel.request("model.select", {
+			model: selection.model,
+			thinking: selection.thinking,
+			presetThinking: selection.presetThinking ?? false,
+		});
+		// Pi does not await every select event, so read the applied state back.
+		await this.synchronizeState();
 	}
 
 	waitForIdle(): Promise<void> {

@@ -41,6 +41,7 @@ import type {
 } from "./hosted-agent-runtime.ts";
 import { InProcessHostedRuntime } from "./in-process-hosted-runtime.ts";
 import { SerialLane } from "./serial-lane.ts";
+import type { ResolvedModelSelection } from "../templates/agent-configuration.ts";
 
 type RuntimeOwnership = "supervisor" | "native-host";
 
@@ -543,6 +544,19 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 		// Isolated resumption is a Progress Verdict wait: a resumed Run that already
 		// settled becomes observable as Stalled only once this wait ends.
 		this.#notifyStateChanged();
+	}
+
+	/**
+	 * Applies a Spawner's model selection to this Agent's Runtime process, whether it is
+	 * admitted, prepared, or retained. Undefined when no process exists; the caller then
+	 * records the selection in the session file, which a process would otherwise own.
+	 * The lane keeps a start from launching on the previous selection meanwhile.
+	 */
+	async selectModelInLane(selection: ResolvedModelSelection): Promise<EffectiveRuntimeSnapshot | undefined> {
+		const run = this.#runtime;
+		if (!run) return undefined;
+		await run.runtime.selectModel(selection);
+		return run.runtime.snapshot();
 	}
 
 	async interruptCurrentRunInLane(): Promise<

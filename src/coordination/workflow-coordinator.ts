@@ -485,6 +485,7 @@ export class WorkflowCoordinator {
 			quarantinedAgentIds: this.#quarantinedAgentIds,
 			ownerAgentId: identity.agentId,
 			messages: this.#messages,
+			models: this.#sessionFactory,
 		});
 		this.#operationalIncidents = new OperationalIncidentCoordinator({
 			agents: this.#agents,

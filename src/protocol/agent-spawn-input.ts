@@ -119,6 +119,21 @@ function validateConfiguration(value: unknown): AgentSpawnConfigurationInput {
 	};
 }
 
+/** One atomic model selection, as `config.model` takes it, with both fields given. */
+export type ModelSelectionInput = Readonly<{
+	id: string;
+	thinking: CandidateThinking | "inherit";
+}>;
+
+/** A Spawner's later change takes the `config.model` pair, where both fields are required. */
+export function validateModelSelectionInput(value: unknown): ModelSelectionInput {
+	const { id, thinking } = validateModel(value);
+	if (id === undefined || thinking === undefined) {
+		throw new CoordinationRecordValidationError("invalid_input: model needs both id and thinking");
+	}
+	return { id, thinking };
+}
+
 /**
  * Structural validation of one recorded Spawn call. The tool and control schemas
  * require an atomic id/thinking pair for new calls; this parse stays lenient because

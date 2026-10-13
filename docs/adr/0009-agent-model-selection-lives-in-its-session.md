@@ -17,4 +17,5 @@ An Agent's model and thinking level are the selection its own Pi session records
 - The host still passes `--model` / `--thinking`, now with the recorded values, so the launch, the receipt, and the recorded selection agree.
 - A dormant parent passes on its recorded selection, so a child inherits what the parent would actually run.
 - The child bootstrap no longer carries preset thinking (Control protocol 14).
+- A supervisor's `agent_control` `set_model` (#221) is one more writer of the same selection: a child with a Runtime process applies it through Control (`model.select`, protocol 15), and one without records it in the session file.
 - ADR 0001 still holds: the selection lives in the Agent's session, never in the shared user configuration. A Moderator left on Pi's default thinking keeps the level Pi chose on its first start.

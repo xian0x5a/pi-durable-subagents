@@ -28,6 +28,7 @@ import {
 } from "../pi-integration/participant-lifecycle.ts";
 import { observeNativeRunStart } from "../pi-integration/native-run-start.ts";
 import type { AgentWaitProgress } from "../protocol/agent-wait.ts";
+import type { ResolvedModelSelection } from "../templates/agent-configuration.ts";
 import { createModelVisibleModeratorObligationReminder } from "../protocol/moderator-obligation-reminder.ts";
 import type { ChildRuntimeInputHandler } from "./child-runtime-input-registry.ts";
 import {
@@ -62,6 +63,8 @@ export type ChildRuntimeBindingInput = Readonly<{
 	runtime: AgentSessionRuntime;
 	launchFacts: ChildLaunchFacts;
 	participantLifecycle: ParticipantLifecycleHandlers;
+	/** Applies a Spawner's validated model selection to the session. */
+	selectModel(selection: ResolvedModelSelection): Promise<void>;
 	hostShell: ChildHostShellPort;
 }>;
 
@@ -245,7 +248,7 @@ function requireGeneration(state: ConnectionState): Generation {
 
 function bindGeneration(
 	state: ConnectionState,
-	{ runtime, launchFacts, participantLifecycle, hostShell }: ChildRuntimeBindingInput,
+	{ runtime, launchFacts, participantLifecycle, selectModel, hostShell }: ChildRuntimeBindingInput,
 ): Generation {
 	let generation!: Generation;
 	let disposed = false;
@@ -576,6 +579,17 @@ function bindGeneration(
 				})
 			);
 			return { accepted };
+		},
+		"model.select": async ({ model, thinking, presetThinking }) => {
+			// Pi reads the model per provider request, so an in-flight request finishes on the
+			// old selection and the next one uses this one, as with a user's /model. The
+			// turn-admission lane keeps it out of a compaction that is choosing its model.
+			await turnCompaction.admit(() => selectModel({
+				model,
+				thinking,
+				...(presetThinking ? { presetThinking } : {}),
+			}));
+			return {};
 		},
 		"presentation.setVisible": ({ visible }) => {
 			hostShell.setPresentationVisible(visible);

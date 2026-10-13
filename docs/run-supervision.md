@@ -179,4 +179,23 @@ A child queued behind `maxConcurrentAgentRuns` has no Run, so aborting it report
 
 Coordinated shutdown remains a dedicated lifecycle path and closes any open Agent view before ending child Runs.
 
+## Change a child's model
+
+```json
+{
+  "operation": "set_model",
+  "agentId": "child-agent-id",
+  "model": { "id": "virtual/strong", "thinking": "preset" }
+}
+```
+
+A supervisor that sees a child struggling or overspending changes its model and thinking instead of replacing it, so the child keeps its context. `model` is the same atomic pair as `agent_spawn` `config.model` and is validated the same way: availability, [`excludedModels`](workflow-policy.md#model-exclusions), and `thinking: preset` only with a `virtual/<name>` id. `inherit` takes the target's parent's current value now; it does not follow later parent changes. A rejected selection leaves the child untouched.
+
+- **Runtime process exists** (a live Run, or a prepared or retained Runtime): the child applies the selection the way a user's `/model` does. A model request already in flight finishes on the old selection, and the next request uses the new one. The child's footer and Runtime snapshot follow.
+- **No Runtime:** the selection is recorded in the child's session, so its next Runtime starts on it, including a queued child that has not started yet.
+
+Either way it becomes the child's [Recorded Model Selection](agent-spawning.md#model-selection), so later Runtimes keep it. A Spawner's `thinking: preset` stays in preset mode; only a later manual thinking change in the child switches it to explicit.
+
+The receipt reports `applied` (Runtime switched) or `recorded` (no Runtime), the selection with `inherit` resolved (`preset` stays `preset`), and `thinkingLevel`: the level the next request runs, clamped to the model or taken from the preset's first usable entry. The caller's `agent_control` call and receipt are the evidence of who changed it; the child's session holds Pi's own `model_change` and `thinking_level_change` entries.
+
 Interruption Holds, live scheduling, open Agent-view attachment, and exact Run handles are volatile. Pi transcripts remain the authority for durable identity, authored Messages, and committed Delivery.

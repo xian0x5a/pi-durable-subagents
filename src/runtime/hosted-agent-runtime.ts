@@ -9,6 +9,7 @@ import type {
 } from "./agent-runtime-host.ts";
 import type { HostedAgentProjection } from "./hosted-agent-projection.ts";
 import type { NativeRunEnd } from "../pi-integration/native-session-driver.ts";
+import type { ResolvedModelSelection } from "../templates/agent-configuration.ts";
 
 export type HostedRuntimeEvent =
 	| Readonly<{ type: "state_changed" }>
@@ -34,6 +35,8 @@ export interface HostedAgentRuntime {
 	subscribe(handler: (event: HostedRuntimeEvent) => void): () => void;
 	clearQueue(): Promise<Readonly<{ steering: string[]; followUp: string[] }>>;
 	abort(): Promise<void>;
+	/** Applies a Spawner's validated model selection; the snapshot then reports it. */
+	selectModel(selection: ResolvedModelSelection): Promise<void>;
 	waitForIdle(): Promise<void>;
 	dispose(): Promise<void>;
 }
