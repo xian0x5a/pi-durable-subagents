@@ -213,8 +213,11 @@ export interface AgentRuntimeHost {
 	cancelIsolatedResumptionInLane(hold: RunResumptionHandle): void;
 	finishIsolatedResumptionInLane(handle: AgentRunHandle): void;
 	interruptCurrentRunInLane(): Promise<"held" | "already_held" | "not_running">;
-	/** Undefined when the Agent has no Runtime process to apply the selection to. */
-	selectModelInLane(selection: ResolvedModelSelection): Promise<EffectiveRuntimeSnapshot | undefined>;
+	/** Undefined when the Agent had no Runtime process and the selection was recorded instead. */
+	selectModelInLane(
+		selection: ResolvedModelSelection,
+		recordInSession: () => void,
+	): Promise<EffectiveRuntimeSnapshot | undefined>;
 	prepareInterruption(): void;
 	beginInputRequired(handle: AgentRunHandle, requestId: string): void;
 	acceptsInputRequired(handle: AgentRunHandle, requestId: string): boolean;

@@ -583,7 +583,7 @@ function bindGeneration(
 		"model.select": async ({ model, thinking, presetThinking }) => {
 			// Pi reads the model per provider request, so an in-flight request finishes on the
 			// old selection and the next one uses this one, as with a user's /model. The
-			// turn-admission lane keeps it out of a compaction that is choosing its model.
+			// turn-admission lane orders it with queue intentions and Owner-started turns.
 			await turnCompaction.admit(() => selectModel({
 				model,
 				thinking,

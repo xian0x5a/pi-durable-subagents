@@ -24,7 +24,7 @@ import {
 	type ModeratorIdentity,
 } from "../protocol/moderator-input.ts";
 import type { OwnerIdentity } from "../protocol/owner-identity.ts";
-import type { RuntimeThinkingLevel } from "../protocol/runtime-configuration.ts";
+import type { ModelReference, RuntimeThinkingLevel } from "../protocol/runtime-configuration.ts";
 import { PiChildHostedRuntime } from "../process-runtime/pi-child-hosted-runtime.ts";
 import { createPiChildProcessProjection } from "../process-runtime/pi-child-process-projection.ts";
 import {
@@ -356,9 +356,13 @@ export class ProcessChildSessionFactory {
 			: target.identity.directSpawnerAgentId;
 		const parent = parentAgentId === null ? undefined : this.#resolveAgent(parentAgentId);
 		if (!parent) throw new Error(`invariant_violation: Agent ${target.identity.agentId} parent is unavailable`);
-		const parentRuntime = await this.#resolveCurrentRuntime(parent, new Set());
+		// Only "inherit" reads the parent, so an explicit pair never depends on resolving
+		// it (a control round-trip, or a walk up dormant ancestors).
+		const inherited = model.id === "inherit" || model.thinking === "inherit"
+			? (await this.#resolveCurrentRuntime(parent, new Set())).configuration
+			: NO_INHERITED_SELECTION;
 		return resolveModelSelection({
-			inherited: parentRuntime.configuration,
+			inherited,
 			overrides: { model },
 			isModelAvailable: (candidate) => this.#isModelAvailable(candidate),
 			isModelExcluded: (candidate) => this.#modelExcluded(candidate),
@@ -372,6 +376,8 @@ export class ProcessChildSessionFactory {
 		const sessionPath = target.transcript.inspect().transcriptPath;
 		if (sessionPath === null) throw new Error(`invariant_violation: Agent ${target.identity.agentId} session is not file-backed`);
 		recordModelSelection(SessionManager.open(sessionPath), selection);
+		// Another writer appended to the file, so refresh the cached transcript the roster reads.
+		target.transcript.inspect();
 	}
 
 	workflowSessionDirectory(): string {
@@ -740,6 +746,16 @@ export class ProcessChildSessionFactory {
 			COORDINATION_EXTENSION_PREFIXES.some((prefix) => path.startsWith(prefix));
 	}
 }
+
+/** An explicit pair never reads its parent's selection; reading one is a defect. */
+const NO_INHERITED_SELECTION: Readonly<{ model: ModelReference; thinking: RuntimeThinkingLevel }> = {
+	get model(): ModelReference {
+		throw new Error("invariant_violation: an explicit model selection read its parent's model");
+	},
+	get thinking(): RuntimeThinkingLevel {
+		throw new Error("invariant_violation: an explicit model selection read its parent's thinking");
+	},
+};
 
 function preparedSelection(prepared: PreparedChildRuntime): RecordedModelSelection {
 	const { model, thinking, presetThinking } = prepared.configuration;

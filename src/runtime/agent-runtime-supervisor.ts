@@ -548,13 +548,26 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 
 	/**
 	 * Applies a Spawner's model selection to this Agent's Runtime process, whether it is
-	 * admitted, prepared, or retained. Undefined when no process exists; the caller then
-	 * records the selection in the session file, which a process would otherwise own.
+	 * admitted, prepared, or retained. Without a process, `recordInSession` writes the
+	 * session file, which a process would otherwise own, and the result is undefined.
 	 * The lane keeps a start from launching on the previous selection meanwhile.
 	 */
-	async selectModelInLane(selection: ResolvedModelSelection): Promise<EffectiveRuntimeSnapshot | undefined> {
+	async selectModelInLane(
+		selection: ResolvedModelSelection,
+		recordInSession: () => void,
+	): Promise<EffectiveRuntimeSnapshot | undefined> {
 		const run = this.#runtime;
-		if (!run) return undefined;
+		if (!run) {
+			recordInSession();
+			// The roster reads the selection from the transcript of a Runtime-less Agent.
+			this.#notifyStateChanged();
+			return undefined;
+		}
+		// A passive preparation released the lane while startup UI waits for the human;
+		// waiting for it here would hold every other lane operation behind that dialog.
+		if (this.#preparedReadiness === run) {
+			throw new Error("agent_starting: the Agent's Runtime is still starting; retry set_model once it is ready");
+		}
 		await run.runtime.selectModel(selection);
 		return run.runtime.snapshot();
 	}

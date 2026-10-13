@@ -149,8 +149,10 @@ export class RunSupervisor {
 		// Validation needs no lane; failing here leaves the Agent untouched.
 		const selection = await this.#models.resolveModelChange(target, model);
 		return target.host.lane.run(async () => {
-			const snapshot = await target.host.selectModelInLane(selection);
-			if (!snapshot) this.#models.recordModelChange(target, selection);
+			const snapshot = await target.host.selectModelInLane(
+				selection,
+				() => this.#models.recordModelChange(target, selection),
+			);
 			return {
 				agentId: target.identity.agentId,
 				disposition: snapshot ? "applied" : "recorded",
