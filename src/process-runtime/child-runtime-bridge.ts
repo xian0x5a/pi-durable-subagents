@@ -19,7 +19,6 @@ import {
 } from "../control/control-protocol-schemas.ts";
 import { installInteractiveHostBridge } from "../pi-integration/interactive-host-bridge.ts";
 import { transcriptFromSessionManager } from "../pi-integration/session-manager-transcript.ts";
-import { registerSessionStartup } from "../pi-integration/session-startup.ts";
 import { VirtualModelRegistrar } from "../pi-integration/virtual-model-registration.ts";
 import { isPresetThinking, thinkingModeState } from "../pi-integration/recorded-model-selection.ts";
 import { installAgentActivityDock } from "../presentation/agent-activity-surface.ts";
@@ -76,7 +75,6 @@ const childControls = (
  */
 const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	let connection: ChildControlConnection | undefined;
-	registerSessionStartup(pi);
 	registerChildBindingHooks(pi, () => connection);
 	const resolveAgentLabel = (agentId: string) =>
 		connection?.currentBinding?.activity.agentLabel(agentId);

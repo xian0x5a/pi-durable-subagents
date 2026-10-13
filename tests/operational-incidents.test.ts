@@ -6,7 +6,6 @@ import { ModeratorReportStore } from "../src/coordination/moderator-reports.ts";
 import { PiChildHostedRuntime } from "../src/process-runtime/pi-child-hosted-runtime.ts";
 import { obligationStack } from "../src/protocol/obligation-focus.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
-import { registerSessionStartup } from "../src/pi-integration/session-startup.ts";
 import { latestRequestFromContext } from "./support/model-requests.ts";
 import assert from "node:assert/strict";
 import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
@@ -3136,10 +3135,7 @@ async function createIncidentBoundaryHarness(
 	} = {},
 	options: Partial<ConstructorParameters<typeof WorkflowCoordinator>[2]> = {},
 ) {
-	// Production always registers the startup hook, so an idle custom delivery can be
-	// returned for its own empty extension-origin kickoff prompt. Without it the
-	// admission correctly rejects the delivery as custom_startup_not_started.
-	const host = await createUnboundTestOwnerHost(t, (pi) => { registerSessionStartup(pi); }, {
+	const host = await createUnboundTestOwnerHost(t, () => undefined, {
 		persistent: true,
 		processVisibleModel: true,
 		implicitModeratorResponses: false,

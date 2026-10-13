@@ -4,16 +4,12 @@ import test from "node:test";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
-import { registerSessionStartup } from "../src/pi-integration/session-startup.ts";
 import { InProcessHostedRuntime } from "../src/runtime/in-process-hosted-runtime.ts";
 import type { HostedRuntimeEvent } from "../src/runtime/hosted-agent-runtime.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
 
 async function ownerRuntime(t: Parameters<typeof createTestOwnerHost>[0], extension?: ExtensionFactory) {
-	const host = await createTestOwnerHost(t, pi => {
-		registerSessionStartup(pi);
-		return extension?.(pi);
-	}, { fauxTokensPerSecond: 100_000 });
+	const host = await createTestOwnerHost(t, pi => extension?.(pi), { fauxTokensPerSecond: 100_000 });
 	const runtime = InProcessHostedRuntime.fromSession({ session: host.session, services: host.services, projection: undefined });
 	return { host, runtime };
 }

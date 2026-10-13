@@ -285,49 +285,39 @@ test("post-bind async native prompt wrapper completes a custom Delivery and rele
 	assertNoFaults(loopback);
 });
 
-for (const matchesSubmission of [false, true]) {
-	test(`forwarded native input ${matchesSubmission ? "transfers its exact preparation once" : "cannot take another submission's preparation"}`, { timeout: 5_000 }, async t => {
-		let modelCalls = 0;
-		const ownerErrors: unknown[] = [];
-		const owner = loopbackOwnerHandlers();
-		const loopback: ChildControlLoopback = await createChildControlLoopback(t, {
-			configure: pi => pi.on("input", event => event.text === "native original"
-				? { action: "transform", text: "transformed native original" }
-				: undefined),
-			// The Owner forwards native human input back to the child as a Delivery
-			// naming the submission, exactly as Run supervision does.
-			owner: { ...owner, lifecycle: { ...owner.lifecycle, async humanInputSubmitted({ text, submissionSequence }) {
-				try {
-					assert.ok(submissionSequence !== undefined);
-					const forwarded = loopback.proxy.deliver({
-						kind: "user", content: text,
-						forwardedInput: { submissionSequence: matchesSubmission ? submissionSequence : submissionSequence + 1 },
-					}, { inspectCommit: () => true });
-					if (matchesSubmission) {
-						assert.equal(await forwarded.transcriptCommit, true);
-						await forwarded.completion;
-					} else {
-						await Promise.all([
-							assert.rejects(forwarded.completion, /startup_preparation_busy/),
-							assert.rejects(forwarded.transcriptCommit!, /startup_preparation_busy/),
-						]);
-					}
-				} catch (error) { ownerErrors.push(error); }
-				return "submitted";
-			} } },
-		});
-		const { host } = loopback;
-		host.model.setResponses([() => { modelCalls++; return fauxAssistantMessage("Forwarded input processed."); }]);
-		await loopback.submitNativeInput("native original");
-		assert.deepEqual(ownerErrors, []);
-		assert.equal(modelCalls, matchesSubmission ? 1 : 0);
-		const inputs = host.session.messages.filter(message => message.role === "user");
-		assert.equal(inputs.length, matchesSubmission ? 1 : 0);
-		if (matchesSubmission) assert.deepEqual(inputs[0]!.content, [{ type: "text", text: "transformed native original" }]);
-		assert.equal(host.session.pendingMessageCount, 0);
-		assertNoFaults(loopback);
+test("forwarded native input transfers its exact submission once", { timeout: 5_000 }, async t => {
+	let modelCalls = 0;
+	const ownerErrors: unknown[] = [];
+	const owner = loopbackOwnerHandlers();
+	const loopback: ChildControlLoopback = await createChildControlLoopback(t, {
+		configure: pi => pi.on("input", event => event.text === "native original"
+			? { action: "transform", text: "transformed native original" }
+			: undefined),
+		// The Owner forwards native human input back to the child as a Delivery
+		// naming the submission, exactly as Run supervision does.
+		owner: { ...owner, lifecycle: { ...owner.lifecycle, async humanInputSubmitted({ text, submissionSequence }) {
+			try {
+				assert.ok(submissionSequence !== undefined);
+				const forwarded = loopback.proxy.deliver({
+					kind: "user", content: text, forwardedInput: { submissionSequence },
+				}, { inspectCommit: () => true });
+				assert.equal(await forwarded.transcriptCommit, true);
+				await forwarded.completion;
+			} catch (error) { ownerErrors.push(error); }
+			return "submitted";
+		} } },
 	});
-}
+	const { host } = loopback;
+	host.model.setResponses([() => { modelCalls++; return fauxAssistantMessage("Forwarded input processed."); }]);
+	await loopback.submitNativeInput("native original");
+	assert.deepEqual(ownerErrors, []);
+	assert.equal(modelCalls, 1);
+	const inputs = host.session.messages.filter(message => message.role === "user");
+	assert.equal(inputs.length, 1);
+	assert.deepEqual(inputs[0]!.content, [{ type: "text", text: "transformed native original" }]);
+	assert.equal(host.session.pendingMessageCount, 0);
+	assertNoFaults(loopback);
+});
 
 function installAsyncNativePromptWrapper(
 	{ host }: ChildControlLoopback,

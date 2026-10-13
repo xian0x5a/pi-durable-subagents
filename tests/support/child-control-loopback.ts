@@ -5,7 +5,6 @@ import { agentControlProtocol, type OwnerToChildControl } from "../../src/contro
 import { AGENT_CONTROL_PROTOCOL_VERSION } from "../../src/control/control-protocol-schemas.ts";
 import { createInMemoryControlTransportPair } from "../../src/control/in-memory-control-transport.ts";
 import { registerParticipantLifecycle } from "../../src/pi-integration/participant-lifecycle.ts";
-import { registerSessionStartup } from "../../src/pi-integration/session-startup.ts";
 import { registerChildBindingHooks } from "../../src/process-runtime/child-binding-hooks.ts";
 import {
 	ChildControlConnection,
@@ -107,7 +106,6 @@ export async function createChildControlLoopback(
 	).lifecycle;
 
 	const host = await createTestOwnerHost(t, (pi) => {
-		registerSessionStartup(pi);
 		registerChildBindingHooks(pi, () => connection);
 		if (options.participantLifecycleHooks) {
 			registerParticipantLifecycle(pi, participantLifecycle, { registerInput: false });

@@ -1,6 +1,5 @@
 import type { AgentSession, AgentSessionServices } from "@earendil-works/pi-coding-agent";
 
-import { bindSessionStartup } from "../pi-integration/session-startup.ts";
 import { NativeSessionDriver } from "../pi-integration/native-session-driver.ts";
 import type {
 	AgentRuntimeDelivery,
@@ -76,11 +75,6 @@ export class InProcessHostedRuntime implements HostedAgentRuntime {
 		delivery: AgentRuntimeDelivery,
 		confirmation?: TranscriptCommitConfirmation,
 	): AgentRuntimeDeliveryDispatch {
-		// A forwarded native input hands its exact preparing submission over before
-		// the driver submits it again; no await separates the two.
-		if (delivery.kind === "user" && delivery.forwardedInput) {
-			bindSessionStartup(this.#session).captureInputHandoff()?.();
-		}
 		const dispatch = this.#driver.deliver(delivery, { proveCommit: confirmation !== undefined });
 		if (!confirmation) return { completion: dispatch.completion };
 		return {

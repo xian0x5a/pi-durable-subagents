@@ -1,5 +1,4 @@
 import "./support/supervised-run.ts";
-import { registerSessionStartup } from "../src/pi-integration/session-startup.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -645,7 +644,7 @@ test("native subscription failure rolls back the already-created projection and 
 });
 
 test("Runtime Host confirms user and custom Delivery transcript commits", async (t) => {
-	const ownerHost = await createTestOwnerHost(t, registerSessionStartup, { persistent: true });
+	const ownerHost = await createTestOwnerHost(t, () => undefined, { persistent: true });
 	ownerHost.model.setResponses([
 		fauxAssistantMessage("User Delivery completed."),
 		fauxAssistantMessage("Custom Delivery completed."),
@@ -828,7 +827,7 @@ function createRunResource(options?: {
 		isIdle: true,
 		isStreaming: false,
 		pendingMessageCount: 0,
-		// The Native Session Driver binds Pi's startup admission over these entry points.
+		// The Native Session Driver observes native starts through these entry points.
 		sessionManager: {},
 		prompt: async () => undefined,
 		sendCustomMessage: async () => undefined,

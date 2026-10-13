@@ -223,9 +223,8 @@ for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
 	});
 }
 
-for (const cancellation of [undefined, "delivery", "native"] as const) {
-	const cancelWhilePreparing = cancellation !== undefined;
-	test(`compaction admission releases for competing native preparation${cancellation === "native" ? " and native abort cancels waiting delivery" : cancellation === "delivery" ? " and cancellation preserves that input" : " before retrying the original custom queue mode"}`, {
+for (const cancelWhilePreparing of [false, true]) {
+	test(`compaction admission releases for competing native preparation${cancelWhilePreparing ? " and cancellation preserves that input" : " before retrying the original custom queue mode"}`, {
 		timeout: 5_000,
 	}, async t => {
 		const inputEntered = deferred();
@@ -298,40 +297,26 @@ for (const cancellation of [undefined, "delivery", "native"] as const) {
 		// on the native preparation before cancelling either side.
 		await new Promise<void>(resolve => setImmediate(resolve));
 		if (cancelWhilePreparing) {
-			if (cancellation === "native") {
-				await session.abort();
-				let timeout!: ReturnType<typeof setTimeout>;
-				try {
-					await Promise.race([
-						assert.rejects(dispatch, /startup_admission_cancelled/),
-						new Promise<never>((_resolve, reject) => {
-							timeout = setTimeout(() => reject(new Error("Native abort left child Delivery waiting for preparation")), 1_000);
-						}),
-					]);
-				} finally { clearTimeout(timeout); }
-			} else {
-				assert.deepEqual(await ownerChannel.request("message.cancel", { deliveryId: "competing-delivery" }), { accepted: true });
-				await assert.rejects(dispatch, /child_turn_admission_cancelled/);
-			}
+			assert.deepEqual(await ownerChannel.request("message.cancel", { deliveryId: "competing-delivery" }), { accepted: true });
+			await assert.rejects(dispatch, /child_turn_admission_cancelled/);
 			releaseInput.resolve();
 		} else {
 			await modelEntered.promise;
 			await new Promise<void>(resolve => setImmediate(resolve));
 			assert.equal(session.agent.hasQueuedMessages(), true, "the original custom follow-up is queued after native entry");
 		}
-		if (cancellation !== "native") await modelEntered.promise;
+		await modelEntered.promise;
 		releaseModel.resolve();
 		if (!cancelWhilePreparing) {
 			assert.equal((await dispatch).transcriptCommitted, true);
 		}
-		if (cancellation === "native") await assert.rejects(nativePrompt!, /startup_admission_cancelled/);
-		else await nativePrompt;
+		await nativePrompt;
 		await session.waitForIdle();
 		await new Promise<void>(resolve => setImmediate(resolve));
 		assert.equal(manualAttempts, 1);
 		assert.equal(preparations, 1,
 			"only the competing native input prepares; active custom input stays native");
-		assert.deepEqual(seen, cancellation === "native" ? [] : cancelWhilePreparing ? [false] : [false, true]);
+		assert.deepEqual(seen, cancelWhilePreparing ? [false] : [false, true]);
 		assert.equal(session.pendingMessageCount, 0);
 		assert.equal(session.sessionManager.getEntries().filter(entry =>
 			entry.type === "custom_message" && entry.customType === deliveryMessage.customType).length,
@@ -343,32 +328,31 @@ for (const cancellation of [undefined, "delivery", "native"] as const) {
 }
 
 test("cancelled child reminder preparation leaves no delivery and permits one later reminder", { timeout: 5_000 }, async t => {
-	const inputEntered = deferred();
-	const releaseInput = deferred();
-	t.after(() => releaseInput.resolve());
+	const preparationEntered = deferred();
+	const releasePreparation = deferred();
+	t.after(() => releasePreparation.resolve());
 	let holdPreparation = true;
 	let modelCalls = 0;
 	const { host, ownerChannel } = await createChildControlLoopback(t, { host: { settings: COMPACTION_SETTINGS }, configure: pi => {
-		pi.on("input", async event => {
-			if (event.source === "extension" && holdPreparation) {
-				inputEntered.resolve();
-				await releaseInput.promise;
+		pi.on("before_agent_start", async event => {
+			if (event.messageType === "custom" && holdPreparation) {
+				preparationEntered.resolve();
+				await releasePreparation.promise;
 			}
-			return { action: "continue" };
 		});
 	} });
 	host.model.setResponses([() => { modelCalls++; return fauxAssistantMessage("Reminder processed."); }]);
 	assert.deepEqual(await ownerChannel.request("moderatorReminder.prepare", { reservationId: "cancelled-reminder" }), { prepared: true });
-	// The Owner abandons the commit while the reminder input is still preparing.
+	// The Owner abandons the commit while the reminder Run is still preparing.
 	const abandon = new AbortController();
 	const cancelled = ownerChannel.request("moderatorReminder.finish", { reservationId: "cancelled-reminder", commit: true }, abandon.signal);
 	const rejected = assert.rejects(cancelled, { name: "AbortError" });
-	await inputEntered.promise;
+	await preparationEntered.promise;
 	abandon.abort();
 	await rejected;
 	holdPreparation = false;
-	releaseInput.resolve();
-	await new Promise<void>(resolve => setImmediate(resolve));
+	releasePreparation.resolve();
+	await host.session.waitForIdle();
 	assert.equal(modelCalls, 0);
 	assert.equal(host.session.pendingMessageCount, 0);
 	assert.equal(host.session.sessionManager.getEntries().some(entry => entry.type === "custom_message"), false);

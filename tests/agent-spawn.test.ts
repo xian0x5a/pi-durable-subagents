@@ -338,13 +338,9 @@ test("an authenticated ordinary Agent creates a durable isolated child and admit
 			},
 		],
 	});
-	// The runtime's empty kickoff prompt is documented (docs/agent-messaging.md
-	// §"Idle custom startup"): it precedes the custom delivery and carries no human
-	// input. Any other user-role entry would be an Owner turn leaking into the child.
-	for (const entry of childEntries) {
-		if (entry.type !== "message" || entry.message.role !== "user") continue;
-		assert.deepEqual(entry.message.content, [{ type: "text", text: "" }]);
-	}
+	// The Creation Request starts the child's Run itself, so a user-role entry
+	// would be an Owner turn leaking into the child.
+	assert.deepEqual(childEntries.filter(entry => entry.type === "message" && entry.message.role === "user"), []);
 
 	await host.runtime.dispose();
 });
