@@ -6,6 +6,7 @@ import type { AgentRunFailure, AgentRuntimeDelivery } from "../runtime/agent-run
 import { RetainedRuntimeQueue, type RuntimeQueue } from "../runtime/retained-runtime-queue.ts";
 import { observeNativeRunStart } from "./native-run-start.ts";
 import { type PendingNativeStarts, pendingNativeStarts } from "./pending-native-starts.ts";
+import { subscribeSession } from "./session-subscription.ts";
 
 /** The single Run-outcome vocabulary of the Owner Runtime, the child bridge, and the Control wire. */
 export const NATIVE_RUN_OUTCOMES = ["completed", "aborted", "error"] as const;
@@ -132,7 +133,7 @@ export class NativeSessionDriver {
 		this.#listeners.add(listener);
 		// One session subscription serves every listener, so classification and
 		// queue capture run once before any listener observes the Run end.
-		this.#unsubscribeSession ??= this.#session.subscribe(event => this.#handleSessionEvent(event));
+		this.#unsubscribeSession ??= subscribeSession(this.#session, event => this.#handleSessionEvent(event));
 		return () => {
 			this.#listeners.delete(listener);
 			if (this.#listeners.size > 0) return;
@@ -298,10 +299,9 @@ export class NativeSessionDriver {
 	}
 
 	#releaseAtSettlement(release: () => void): void {
-		const unsubscribe = this.#session.subscribe(event => {
+		const unsubscribe = subscribeSession(this.#session, event => {
 			if (event.type !== "agent_settled") return;
-			// Pi walks its live listener array; leave it after this emit.
-			queueMicrotask(unsubscribe);
+			unsubscribe();
 			release();
 		});
 	}
@@ -451,7 +451,7 @@ class TranscriptCommitProof {
 	begin(): void {
 		this.#existingEntryIds = new Set(this.#session.sessionManager.getEntries().map(entry => entry.id));
 		if (this.#unsubscribe) return;
-		this.#unsubscribe = this.#session.subscribe(event => {
+		this.#unsubscribe = subscribeSession(this.#session, event => {
 			if (event.type === "message_end") this.#messageEnded(event.message);
 			// A user Delivery's own message ends before its Run settles, and another
 			// Run's settlement says nothing about it.
@@ -519,11 +519,8 @@ class TranscriptCommitProof {
 	#finish(settlement: () => void): void {
 		if (this.#finished) return;
 		this.#finished = true;
-		// Pi's _emit walks its live listener array, so removing this listener
-		// mid-emit would skip the next listener for that same event.
-		const unsubscribe = this.#unsubscribe;
+		this.#unsubscribe?.();
 		this.#unsubscribe = undefined;
-		if (unsubscribe) queueMicrotask(unsubscribe);
 		this.#onFinished();
 		settlement();
 	}
