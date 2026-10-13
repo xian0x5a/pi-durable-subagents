@@ -4,6 +4,7 @@ import test from "node:test";
 
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { SessionManager, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 
 import { createViewBackedParticipantHandlers } from "../src/coordination/view-backed-participant-handlers.ts";
 import type { OrdinaryAgentCoordinatorView } from "../src/coordination/workflow-coordinator.ts";
@@ -14,20 +15,35 @@ import { createMessageDelivery } from "../src/protocol/message-delivery.ts";
 import { bindTestOwnerHost, createUnboundTestOwnerHost } from "./support/pi-host.ts";
 import { createTestWorkflowCoordinator } from "./support/workflow-coordinator.ts";
 
+const SIDE_EFFECT_TOOL = "record_side_effect";
+
 // Issue #237: signal shutdown disposes the Workflow before Pi stops its TUI, so a
 // streaming Owner Run keeps firing hooks after the shutdown fence closes.
-test("a streaming Owner Run finishes quietly after Workflow shutdown begins while coordination stays fenced", { timeout: 15_000 }, async t => {
+// Issue #238: that Run must also stop doing work once shutdown begins, even while
+// the final native disposal is still pending.
+test("a streaming Owner Run stops working and finishes quietly after Workflow shutdown begins while coordination stays fenced", { timeout: 15_000 }, async t => {
+	const releaseNativeDisposal = deferred();
+	// A failed assertion must not leave shutdown parked on held disposal during host cleanup,
+	// so this hook is registered before the host's own disposal hook.
+	t.after(() => releaseNativeDisposal.resolve());
 	let view!: OrdinaryAgentCoordinatorView;
 	const firedAfterShutdown = new Set<string>();
+	const sideEffectsAfterShutdown: string[] = [];
 	let shutdownBegun = false;
 	const host = await createUnboundTestOwnerHost(t, pi => {
 		registerParticipantLifecycle(pi, createViewBackedParticipantHandlers("owner", () => view).lifecycle);
 		const record = (event: string) => () => { if (shutdownBegun) firedAfterShutdown.add(event); };
 		pi.on("message_end", record("message_end"));
-		pi.on("tool_execution_start", record("tool_execution_start"));
-		pi.on("turn_end", record("turn_end"));
-		pi.on("agent_before_settle", record("agent_before_settle"));
 		pi.on("agent_end", record("agent_end"));
+		pi.registerTool({
+			name: SIDE_EFFECT_TOOL, label: "Side effect",
+			description: "Performs an externally visible side effect.",
+			parameters: Type.Object({}),
+			async execute(toolCallId) {
+				if (shutdownBegun) sideEffectsAfterShutdown.push(toolCallId);
+				return { content: [{ type: "text", text: "Side effect performed." }], details: {} };
+			},
+		});
 	}, { persistent: true });
 	await bindTestOwnerHost(host, "tui");
 	const identity = adoptOrValidateOwnerIdentity(host.runtime);
@@ -38,23 +54,26 @@ test("a streaming Owner Run finishes quietly after Workflow shutdown begins whil
 
 	const streaming = deferred();
 	const releaseStream = deferred();
+	let providerRequestsAfterShutdown = 0;
 	host.model.setResponses([
 		async () => {
 			streaming.resolve();
 			await releaseStream.promise;
 			return fauxAssistantMessage(
-				fauxToolCall("read", { path: "absent-during-shutdown.txt" }, { id: "read-during-shutdown" }),
+				fauxToolCall(SIDE_EFFECT_TOOL, {}, { id: "side-effect-during-shutdown" }),
 				{ stopReason: "toolUse" },
 			);
 		},
-		fauxAssistantMessage("Finished while the Workflow shuts down."),
+		() => {
+			if (shutdownBegun) providerRequestsAfterShutdown += 1;
+			return fauxAssistantMessage("Finished while the Workflow shuts down.");
+		},
 	]);
 	const ownerRun = host.session.prompt("Keep streaming through shutdown.");
 	await streaming.promise;
 
 	// Hold native disposal so the Owner Run stays alive behind the closed fence,
 	// as it does until Pi's final Owner lane discard.
-	const releaseNativeDisposal = deferred();
 	const shutdown = coordinator.shutdown(async () => {
 		await releaseNativeDisposal.promise;
 		await host.runtime.dispose();
@@ -63,16 +82,18 @@ test("a streaming Owner Run finishes quietly after Workflow shutdown begins whil
 	releaseStream.resolve();
 	await ownerRun;
 
-	assert.deepEqual(
-		[...firedAfterShutdown].sort(),
-		["agent_before_settle", "agent_end", "message_end", "tool_execution_start", "turn_end"],
-		"every hook that finishes the streaming Run fired after shutdown began",
-	);
+	assert.deepEqual(sideEffectsAfterShutdown, [], "no native tool executes after shutdown began");
+	assert.equal(providerRequestsAfterShutdown, 0, "no provider request is issued after shutdown began");
+	// The stopped Run still finishes through its hooks, which must stay quiet (#237).
+	for (const event of ["message_end", "agent_end"]) {
+		assert.ok(firedAfterShutdown.has(event), `${event} finishes the stopped Run after shutdown began`);
+	}
 	assert.deepEqual(
 		host.ui.notifications.filter(notification => notification.type === "error"),
 		[],
 		"no shutdown-time extension error is painted",
 	);
+	assert.notEqual(view.humanInputMode(), "run_suspended", "stopping for shutdown is not an Owner Run failure");
 
 	const owner = createViewBackedParticipantHandlers("owner", () => view);
 	await assert.rejects(async () => owner.coordination.observe({ operation: "status" }), /host_shutting_down/);
