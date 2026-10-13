@@ -68,8 +68,8 @@ test("real fullscreen PTY mouse-scrolls a 100x30 Agent view, switches Agent mode
 	// navigation and complete-frame reflow at a non-default size
 	// (docs/agent-view-acceptance.md: mouse input, streaming, and reflow evidence),
 	// /agents returning as soon as physical child attachment is ready, and switching
-	// one mounted view between two Agent modes. The failure and CLI cases still
-	// cover the default 80x24 size.
+	// one mounted view between two Agent modes. The input-failure and CLI cases
+	// still cover the default 80x24 size.
 	// Fail fast if Pi rebinds jump-to-latest again: a stale key otherwise leaves
 	// the view scrolled up and surfaces only as a fixture timeout (#191).
 	assert.ok(
