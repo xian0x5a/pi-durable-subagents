@@ -161,6 +161,8 @@ export interface AgentRuntimeHost {
 	startInLane(reasons?: readonly AgentRetentionReason[]): Promise<AgentRunHandle>;
 	prepareInLane(reasons?: readonly AgentRetentionReason[]): Promise<void>;
 	beginShutdown(): Promise<boolean>;
+	/** Stops current model and tool activity without awaiting idle; ending stays with the lane. */
+	stopRunForShutdown(): void;
 	cancelRuntimeInitialization(projection: TerminalProjection, error: unknown): Promise<boolean>;
 	requestRuntimeInitializationAbort(
 		projection: TerminalProjection,

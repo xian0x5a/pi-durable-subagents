@@ -919,6 +919,9 @@ export class WorkflowCoordinator {
 		this.#shuttingDown = true;
 		this.#shutdownController.abort();
 		this.#agentWaits.shutdown();
+		// Stop the Owner Run now so it spends no tools or provider requests while
+		// children and incidents are torn down. Native disposal still ends it last.
+		this.#agents.get(this.#ownerIdentity.agentId)?.host.stopRunForShutdown();
 	}
 
 	#assertAdmissionOpen(): void {
