@@ -143,7 +143,7 @@ async function recoveredObligationContext(evidence: ReturnType<typeof requestCoo
 		async humanInputMode() { return "agent"; },
 		async toolResultCommitting() {},
 		async rootToolExecutionStarted() {},
-		async safeBoundaryReached() {},
+		async safeBoundaryReached() { return "reached"; },
 		async executionEnded() {},
 	}, { registerInput: false });
 	const context = { sessionManager: responder.manager } as unknown as ExtensionContext;

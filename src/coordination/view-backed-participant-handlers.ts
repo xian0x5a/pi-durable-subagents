@@ -110,9 +110,10 @@ function lifecycleHandlers(resolveView: () => ParticipantView): ParticipantLifec
 	// not stopped yet, so these hooks end quietly instead. Admission and input hooks
 	// stay fenced: they start new work rather than finish a streaming Run.
 	const unlessShuttingDown = <Args extends unknown[], Result>(
-		hook: (...args: Args) => Promise<Result | undefined>,
-	) => async (...args: Args): Promise<Result | undefined> =>
-		resolveView().isShuttingDown() ? undefined : hook(...args);
+		shuttingDownResult: Result,
+		hook: (...args: Args) => Promise<Result>,
+	) => async (...args: Args): Promise<Result> =>
+		resolveView().isShuttingDown() ? shuttingDownResult : hook(...args);
 	return {
 		executionStarted: async (submissionSequence) => {
 			await resolveView().beginExecution(submissionSequence);
@@ -128,23 +129,28 @@ function lifecycleHandlers(resolveView: () => ParticipantView): ParticipantLifec
 		async humanInputMode() {
 			return resolveView().humanInputMode();
 		},
-		toolResultCommitting: unlessShuttingDown(async (input) => {
+		toolResultCommitting: unlessShuttingDown(undefined, async (input) => {
 			await resolveView().refreshTranscriptFacts();
 			return resolveView().guardToolResult(input.message);
 		}),
 		// A previous sequential tool result is committed before Pi admits the next
 		// sibling. Reconcile here so input-required attention cannot cross that barrier.
-		rootToolExecutionStarted: unlessShuttingDown(async (input) => {
+		rootToolExecutionStarted: unlessShuttingDown(undefined, async (input) => {
 			await reconcileCommittedFacts();
+			// Shutdown can begin during the refresh; only Run Suspension should throw here.
+			if (resolveView().isShuttingDown()) return;
 			resolveView().assertNotShutDownOrSuspended();
 			resolveView().beginToolExecution(input.toolCallId, input.toolName);
 		}),
-		safeBoundaryReached: unlessShuttingDown(async () => {
+		// Re-read the fence afterwards: shutdown beginning mid-boundary must still
+		// refuse the settlement continuation, which would start new model work.
+		safeBoundaryReached: unlessShuttingDown("shutting_down", async () => {
 			await resolveView().refreshTranscriptFacts();
 			await resolveView().reachSafeBoundary();
+			return resolveView().isShuttingDown() ? "shutting_down" : "reached";
 		}),
 		// Aborted and failed turns may not reach turn_end. agent_end follows all native
 		// message commits, so it safely reconciles their final Human result as well.
-		executionEnded: unlessShuttingDown(reconcileCommittedFacts),
+		executionEnded: unlessShuttingDown(undefined, reconcileCommittedFacts),
 	};
 }

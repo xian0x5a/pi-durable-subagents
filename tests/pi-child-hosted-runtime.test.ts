@@ -616,7 +616,7 @@ function ordinaryOwnerHandlers(agentId: string): OwnerParticipantRequestHandlers
 			async humanInputMode() { return "agent"; },
 			async toolResultCommitting() { return undefined; },
 			async rootToolExecutionStarted() {},
-			async safeBoundaryReached() {},
+			async safeBoundaryReached() { return "reached"; },
 			async executionEnded() {},
 		},
 		coordination: {

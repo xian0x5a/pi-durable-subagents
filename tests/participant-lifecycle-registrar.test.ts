@@ -335,6 +335,7 @@ test("participant lifecycle registrar routes the exact current Pi boundaries in 
 		},
 		async safeBoundaryReached() {
 			calls.push("safe-boundary");
+			return "reached";
 		},
 		async executionEnded() {
 			calls.push("execution-ended");
@@ -749,7 +750,7 @@ function lifecycleHandlers(
 		async primaryInputQueued() {},
 		async toolResultCommitting() {},
 		async rootToolExecutionStarted() {},
-		async safeBoundaryReached() {},
+		async safeBoundaryReached() { return "reached"; },
 		async executionEnded() {},
 		...overrides,
 	};
@@ -765,6 +766,7 @@ function localLifecycleView(calls: unknown[]) {
 			return { answerMode: false };
 		},
 		obligationFrames() { return []; },
+		isShuttingDown() { return false; },
 		async refreshTranscriptFacts() {},
 		async beginExecution() {
 			calls.push("begin-execution");

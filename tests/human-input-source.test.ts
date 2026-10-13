@@ -26,7 +26,7 @@ for (const route of ["interactive", "rpc", "extension", "sdk-default"] as const)
 			async humanInputMode() { return "agent"; },
 			async toolResultCommitting() {},
 			async rootToolExecutionStarted() {},
-			async safeBoundaryReached() {},
+			async safeBoundaryReached() { return "reached"; },
 			async executionEnded() {},
 		};
 		const host = await createTestOwnerHost(t, pi => {

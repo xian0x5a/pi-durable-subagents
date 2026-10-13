@@ -134,7 +134,7 @@ export function createControlBackedChildParticipantHandlers(
 			await request("runtime.rootToolExecutionStart", input);
 		},
 		async safeBoundaryReached() {
-			await request("runtime.safeBoundary", {});
+			return (await request("runtime.safeBoundary", {})).outcome;
 		},
 		async executionEnded() {
 			await request("runtime.executionEnd", {});
@@ -237,10 +237,7 @@ function ownerParticipantServeMap(
 			await lifecycle.rootToolExecutionStarted(input);
 			return {};
 		},
-		"runtime.safeBoundary": async () => {
-			await lifecycle.safeBoundaryReached();
-			return {};
-		},
+		"runtime.safeBoundary": async () => ({ outcome: await lifecycle.safeBoundaryReached() }),
 		"runtime.executionEnd": async () => {
 			await lifecycle.executionEnded();
 			return {};

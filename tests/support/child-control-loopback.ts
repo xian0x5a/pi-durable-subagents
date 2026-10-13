@@ -223,7 +223,7 @@ export function loopbackOwnerHandlers(): OwnerParticipantRequestHandlers<"ordina
 			humanInputMode: async () => "agent",
 			toolResultCommitting: async () => undefined,
 			rootToolExecutionStarted: async () => undefined,
-			safeBoundaryReached: async () => undefined,
+			safeBoundaryReached: async () => "reached" as const,
 			executionEnded: async () => undefined,
 		},
 		coordination: {
