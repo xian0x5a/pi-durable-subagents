@@ -1,5 +1,5 @@
 ---
-status: done
+status: abandoned
 ---
 
 # Spawner changes a child's model and thinking
@@ -75,6 +75,8 @@ User's words (issue): "A Spawner that sees a child struggling (too weak a model,
 - Pi itself lets `/model` change the model while streaming; the in-flight request keeps its model. So the "safe boundary" is Pi's own, with no deferral needed.
 
 ## Outcomes & Retrospective
+
+- Not merged. A mid-conversation model switch busts the prompt cache: the new model re-reads the whole context uncached, which costs most for the long-running child this targets. A fresh spawn with a brief covers most cases. If a child must keep its identity (outstanding Requests, descendants), compacting before the switch is the variant to build. Kept as a closed reference PR.
 
 - `agent_control` `set_model` lets a supervisor change a child's model and thinking without replacing it. Durable behavior lives in `docs/run-supervision.md#change-a-childs-model`, `docs/agent-spawning.md#model-selection`, and ADR 0009's consequences.
 - Review-driven limits, documented: a Runtime still behind passive startup UI rejects with `agent_starting` instead of holding the lane; a Runtime whose process just ended may report an error until failure cleanup makes it Dormant.
