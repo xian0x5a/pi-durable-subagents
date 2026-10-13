@@ -10,11 +10,11 @@ import {
 	InteractiveMode,
 	type AgentSession,
 } from "@earendil-works/pi-coding-agent";
-import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 import piAgentCoordination from "../../src/index.ts";
 import { createManuallyManagedUnboundTestOwnerHost } from "../support/pi-host.ts";
+import { applyRequestedPtySize } from "../support/pty-terminal-size.ts";
 
 const OWNER_EDITOR_TEXT = "unfinished Owner editor text";
 const DIRECT_AGENT_INPUT = "direct input through child editor";
@@ -34,19 +34,7 @@ const STREAMING_CHILD_RESPONSE = [
 	),
 ].join("\n");
 
-const requestedColumns = Number(process.env.PTY_TEST_COLUMNS);
-const requestedRows = Number(process.env.PTY_TEST_ROWS);
-if (
-	Number.isInteger(requestedColumns) && requestedColumns > 0 &&
-	Number.isInteger(requestedRows) && requestedRows > 0
-) {
-	const resized = spawnSync(
-		"stty",
-		["cols", String(requestedColumns), "rows", String(requestedRows)],
-		{ stdio: "inherit" },
-	);
-	if (resized.status !== 0) throw new Error("PTY fixture could not resize its terminal");
-}
+applyRequestedPtySize();
 
 const host = await createManuallyManagedUnboundTestOwnerHost(piAgentCoordination, {
 	persistent: true,

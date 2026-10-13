@@ -3,6 +3,7 @@ import {
 	InteractiveMode,
 	type AgentSession,
 } from "@earendil-works/pi-coding-agent";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,7 @@ import { fileURLToPath } from "node:url";
 
 import piAgentCoordination from "../../src/index.ts";
 import { createManuallyManagedUnboundTestOwnerHost } from "../support/pi-host.ts";
+import { applyRequestedPtySize } from "../support/pty-terminal-size.ts";
 
 const OWNER_EDITOR_TEXT = "Owner input survives child UI failure";
 const UNVIEWED_CHILD_REQUEST = "Remain unviewed until the Owner runtime is disposed.";
@@ -26,8 +28,15 @@ const initializationReleasePath = join(
 	tmpdir(),
 	`.pty-agent-view-failure-${process.pid}.release`,
 );
+// The test creates this once it has read the restored Owner screen; tearing
+// down earlier would let shutdown repaint the screen under assertion.
+const restoredObservedPath = join(
+	tmpdir(),
+	`.pty-agent-view-failure-${process.pid}.observed`,
+);
 process.env.PTY_AGENT_VIEW_FAILURE_EVIDENCE = evidencePath;
 process.env.PTY_AGENT_VIEW_FAILURE_RELEASE = initializationReleasePath;
+applyRequestedPtySize();
 const host = await createManuallyManagedUnboundTestOwnerHost(piAgentCoordination, {
 	persistent: true,
 	processVisibleModel: true,
@@ -95,6 +104,7 @@ async function finishInteractiveFailure(): Promise<void> {
 		failureKind,
 		childAgentId,
 		initializationReleasePath,
+		restoredObservedPath,
 		ownerEditorText: OWNER_EDITOR_TEXT,
 	})}\n`);
 	await openAgents(ownerSession);
@@ -135,9 +145,7 @@ async function finishInteractiveFailure(): Promise<void> {
 		}
 	}
 	if (failureKind === "initialization") {
-		// The restored baseline only stays on screen until the Owner's delivery-failure
-		// notice lands. Announce restoration after that cascade, like the input kind
-		// does, so the assertion reads a settled Owner screen.
+		// Announce restoration once the Owner reports the failure, like the input kind does.
 		await waitForDiagnostic((message) => message.startsWith("Agent view failed: "));
 	}
 	await finishRestoredFailure();
@@ -146,7 +154,7 @@ async function finishInteractiveFailure(): Promise<void> {
 async function finishRestoredFailure(): Promise<void> {
 	process.stdout.write(`\n__PTY_AGENT_VIEW_FAILURE_RESTORED__${failureKind}\n`);
 	(mode as unknown as { renderer: { renderNow(force?: boolean): void } }).renderer.renderNow(true);
-	await new Promise<void>((resolve) => setImmediate(resolve));
+	await waitForFile(restoredObservedPath);
 
 	await host.runtime.dispose();
 	mode.stop();
@@ -176,6 +184,15 @@ async function waitForDiagnostic(
 		await new Promise<void>((resolve) => setTimeout(resolve, 10));
 	}
 	throw new Error("PTY Owner diagnostic did not become available");
+}
+
+async function waitForFile(path: string): Promise<void> {
+	const deadline = Date.now() + 20_000;
+	while (Date.now() < deadline) {
+		if (existsSync(path)) return;
+		await new Promise<void>((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error(`PTY test did not create ${path}`);
 }
 
 async function readEvidence(): Promise<Array<Record<string, unknown>>> {
