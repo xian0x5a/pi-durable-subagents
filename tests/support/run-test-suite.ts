@@ -59,6 +59,7 @@ const PROCESS_TEST_FILES = new Set([
 	"run-suspension-integration.test.ts",
 	"run-suspension-cold-recovery.test.ts",
 	"run-test-suite.test.ts",
+	"spawner-model-change.test.ts",
 	"steer-request-preemption.test.ts",
 	"sticky-model-selection.test.ts",
 	"unix-control-transport.test.ts",
