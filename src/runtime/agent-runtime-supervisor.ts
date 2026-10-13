@@ -349,6 +349,12 @@ export class AgentRuntimeSupervisor implements AgentRuntimeHost {
 			: false;
 	}
 
+	stopRunForShutdown(): void {
+		const run = this.#runtime;
+		if (!run || run.failed || run.runtime.workState() === "unavailable") return;
+		this.#trackOperation(run.runtime.abort());
+	}
+
 	async cancelRuntimeInitialization(
 		projection: TerminalProjection,
 		error: unknown,
