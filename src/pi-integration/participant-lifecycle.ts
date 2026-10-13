@@ -186,7 +186,7 @@ export function registerParticipantLifecycle(
 	// (see AgentRuntimeSupervisor.runAtSafeBoundary).
 	pi.on("turn_end", async (event, ctx) => {
 		if (event.toolResults.some(deliveredAnswer)) answerDelivered = true;
-		if (event.toolResults.length > 0) await handlers.safeBoundaryReached();
+		if (event.toolResults.length > 0 && await handlers.safeBoundaryReached() === "shutting_down") return undefined;
 		const transcript = transcriptFromSessionManager(ctx.sessionManager).inspect();
 		const frames = currentFrames(transcript, ctx.sessionManager.getSessionId());
 		const hides = resolvedAttentionEdits(transcript, frames, false);
