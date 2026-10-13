@@ -57,8 +57,7 @@ User's words (issue): "A Spawner that sees a child struggling (too weak a model,
 ## Progress
 
 - [x] Investigation and design.
-- [ ] Implementation.
-- [ ] Docs.
+- [x] Implementation and docs (9cdf22a). Focused fast/process tests pass; protocol-version fixtures updated (14 → 15).
 - [ ] Independent tests.
 - [ ] Independent review.
 
@@ -72,3 +71,5 @@ User's words (issue): "A Spawner that sees a child struggling (too weak a model,
 
 - `observe()` reports `dormant` for a prepared or retained Runtime that is not admitted, so routing uses Runtime existence, not phase.
 - Pi's `setThinkingLevel` emits `thinking_level_select` without awaiting, so a boolean suppression flag would race.
+- A spawn caches its first preparation; launching it after a `set_model` on a queued child would pass the old `--model`. The first preparation is now used only while it still matches the recorded selection.
+- Pi itself lets `/model` change the model while streaming; the in-flight request keeps its model. So the "safe boundary" is Pi's own, with no deferral needed.
