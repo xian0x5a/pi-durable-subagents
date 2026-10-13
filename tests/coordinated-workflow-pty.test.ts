@@ -68,8 +68,8 @@ test("real fullscreen PTY mouse-scrolls a 100x30 Agent view, switches Agent mode
 	// navigation and complete-frame reflow at a non-default size
 	// (docs/agent-view-acceptance.md: mouse input, streaming, and reflow evidence),
 	// /agents returning as soon as physical child attachment is ready, and switching
-	// one mounted view between two Agent modes. The failure and CLI cases still
-	// cover the default 80x24 size.
+	// one mounted view between two Agent modes. The input-failure and CLI cases
+	// still cover the default 80x24 size.
 	// Fail fast if Pi rebinds jump-to-latest again: a stale key otherwise leaves
 	// the view scrolled up and surfaces only as a fixture timeout (#191).
 	assert.ok(
@@ -275,6 +275,7 @@ test("real fullscreen PTY returns to Owner after child input failure and dispose
 		const setup = await terminal.marker<{
 			childAgentId: string;
 			ownerEditorText: string;
+			restoredObservedPath: string;
 		}>("__PTY_AGENT_VIEW_FAILURE_SETUP__");
 		await terminal.waitForScreen((frame) =>
 			frame.some((line) => line.includes("PTY Failure Worker")) &&
@@ -294,6 +295,7 @@ test("real fullscreen PTY returns to Owner after child input failure and dispose
 			frame.some((line) => line.includes(setup.ownerEditorText))
 		);
 		assert.equal(ownerFrame.length, 24);
+		await writeFile(setup.restoredObservedPath, "observed\n");
 		await terminal.waitFor("__PTY_UNVIEWED_CHILD_DISPOSED_ONCE__");
 		await terminal.closed();
 	} finally {
@@ -307,11 +309,16 @@ test("real fullscreen PTY closes a failed Agent runtime initialization and resto
 }, async () => {
 	const terminal = launchFixture(FAILURE_FIXTURE, {
 		PTY_AGENT_VIEW_FAILURE: "initialization",
+		// Whether the Owner also receives a delivery-failure notice races the child's
+		// failure; leave room for it so the Owner baseline stays in view either way.
+		PTY_TEST_COLUMNS: "80",
+		PTY_TEST_ROWS: "50",
 	});
 	try {
 		const setup = await terminal.marker<{
 			ownerEditorText: string;
 			initializationReleasePath: string;
+			restoredObservedPath: string;
 		}>(
 			"__PTY_AGENT_VIEW_FAILURE_SETUP__",
 		);
@@ -329,6 +336,7 @@ test("real fullscreen PTY closes a failed Agent runtime initialization and resto
 			frame.some((line) => line.includes("Owner failure baseline remains mounted")) &&
 			frame.some((line) => line.includes(setup.ownerEditorText))
 		);
+		await writeFile(setup.restoredObservedPath, "observed\n");
 		await terminal.closed();
 	} finally {
 		terminal.kill();
