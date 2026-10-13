@@ -101,7 +101,7 @@ test("a streaming Owner Run stops working and finishes quietly after Workflow sh
 		async () => owner.coordination.message("message-after-shutdown", { operation: "poll", messageId: "message-1" }),
 		/host_shutting_down/,
 	);
-	await assert.rejects(async () => owner.lifecycle.executionStarted(), /host_shutting_down/);
+	assert.equal(await owner.lifecycle.executionStarted(), "shutting_down", "execution start reports shutdown so the native Run aborts");
 
 	releaseNativeDisposal.resolve();
 	await shutdown;

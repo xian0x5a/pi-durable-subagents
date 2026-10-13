@@ -107,18 +107,18 @@ function lifecycleHandlers(resolveView: () => ParticipantView): ParticipantLifec
 	// Workflow shutdown keeps a streaming Run alive until its lane is discarded, so
 	// its remaining hooks still fire. The fence already refuses their work, and Pi
 	// paints each refusal as an extension error on a TUI that signal shutdown has
-	// not stopped yet, so these hooks end quietly instead. Admission and input hooks
-	// stay fenced: they start new work rather than finish a streaming Run.
-	const unlessShuttingDown = <Args extends unknown[], Result>(
-		shuttingDownResult: Result,
+	// not stopped yet, so these hooks end quietly instead. Execution start reports
+	// shutdown so the hook aborts the new Run; input hooks stay fenced.
+	const unlessShuttingDown = <Args extends unknown[], Result, ShuttingDownResult>(
+		shuttingDownResult: ShuttingDownResult,
 		hook: (...args: Args) => Promise<Result>,
-	) => async (...args: Args): Promise<Result> =>
+	) => async (...args: Args): Promise<Result | ShuttingDownResult> =>
 		resolveView().isShuttingDown() ? shuttingDownResult : hook(...args);
 	return {
-		executionStarted: async (submissionSequence) => {
+		executionStarted: unlessShuttingDown("shutting_down" as const, async (submissionSequence?: number) => {
 			await resolveView().beginExecution(submissionSequence);
 			return resolveView().obligationFrames();
-		},
+		}),
 		humanInputSubmitted: (input) =>
 			resolveView().resumeFromHuman(
 				input.text,
