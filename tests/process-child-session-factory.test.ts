@@ -447,7 +447,6 @@ test("ordinary production spawn runs in a real child process over Owner particip
 			}, { id: "proxied-child-message" }),
 			{ stopReason: "toolUse" },
 		),
-		fauxAssistantMessage("Real process child completed after proxied observation."),
 	]);
 	const coordinator = await createTestWorkflowCoordinator(host, identity, {
 		entryModulePath: "<inline:pi-durable-subagents>",
@@ -491,23 +490,20 @@ test("ordinary production spawn runs in a real child process over Owner particip
 			["agent-coordination.identity"],
 		);
 
-		await waitFor(() => {
-			const entries = SessionManager.open(sessionPath).getEntries();
-			return entries.some(
-				(entry) => entry.type === "message" && entry.message.role === "assistant" &&
-					entry.message.content.some(
-						(part) => part.type === "text" && part.text.includes("Real process child completed"),
-					),
-			);
-		});
+		// A standalone Answer ends the child's tool loop, so the Run settles without a
+		// fourth model call once the Answer reaches the Owner.
+		await waitFor(() => host.session.sessionManager.getEntries().some(
+			(entry) => entry.type === "custom_message" && entry.customType === "agent-coordination.message-delivery" &&
+				JSON.stringify(entry.content).includes("Process child answer crossed the Owner RPC boundary."),
+		));
+		await waitFor(() => owner.status(receipt.agentId).run.phase === "dormant");
 		const childPid = Number(await readFile(pidEvidence, "utf8"));
 		assert.ok(Number.isSafeInteger(childPid) && childPid > 1);
 		assert.notEqual(childPid, process.pid);
-		assert.equal(broker.state.callCount, 4);
+		assert.equal(broker.state.callCount, 3);
 		assert.match(childSystemPrompt, /## Available Agent Templates/);
 		assert.match(childSystemPrompt, /process-delegate/);
 
-		await waitFor(() => owner.status(receipt.agentId).run.phase === "dormant");
 		const entriesBeforeSuccessor = SessionManager.open(sessionPath).getEntries().length;
 		await rename(join(templateDirectory, "process-delegate.md"), join(templateDirectory, "renamed.md"));
 		await writeFile(join(templateDirectory, "renamed.md"), "---\nname: renamed\n---\nChanged rules.");
