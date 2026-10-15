@@ -1,0 +1,23 @@
+# Opens one PR per Pi release; the Pi upgrade routine takes it from there.
+# See docs/pi-upgrade.md.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: cron
+      # Hourly through Pi's usual release hours.
+      cronjob: "7 5-19 * * *"
+      timezone: America/Vancouver
+    # Only Pi is automated; other dependencies are bumped by hand.
+    allow:
+      - dependency-name: "@earendil-works/pi-*"
+    groups:
+      pi:
+        patterns:
+          - "@earendil-works/pi-*"
+    # Moves the exact devDependency pins. The peerDependencies floor is a
+    # different range, so Dependabot leaves it for the upgrade agent.
+    versioning-strategy: increase
+    commit-message:
+      prefix: "chore(deps)"
