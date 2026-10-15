@@ -5,9 +5,10 @@ updates:
   - package-ecosystem: npm
     directory: /
     schedule:
-      interval: cron
-      # Hourly through Pi's usual release hours.
-      cronjob: "7 5-19 * * *"
+      # Dependabot allows at most one check a day; a cron schedule more
+      # frequent than that is rejected.
+      interval: daily
+      time: "14:00"
       timezone: America/Vancouver
     # Only Pi is automated; other dependencies are bumped by hand.
     allow:
