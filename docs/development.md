@@ -62,7 +62,7 @@ On Linux with writable cgroup-v2 support, the existing cgroup and guardian conta
 
 ## Releasing
 
-Pull requests and `main` pushes run no CI; the Release workflow is the only automated gate. It runs `typecheck` and `test:ci` on Node 22, the engines floor; local development covers newer Node. `test:ci` is the fast suite with a 15-second file timeout and an 8-minute deadline, because shared runners can be several times slower than a development machine. Run `npm run test:process` locally before a release; it launches real Pi processes and stays out of CI.
+Pull requests and `main` pushes run no CI; the Release workflow is the only automated gate. It runs `typecheck` and `test:ci` on Node 22, the engines floor; local development covers newer Node. `test:ci` is the fast suite with a 15-second file timeout and an 8-minute deadline, because shared runners can be several times slower than a development machine. Run `npm run test:process` locally before a release you cut by hand; it launches real Pi processes and stays out of CI. [Pi upgrades](pi-upgrade.md) are automated and release without it.
 
 Pushing a stable version tag (`X.Y.Z` or `vX.Y.Z`; pre-release tags are ignored) runs the Release workflow. After the Node 22 gate passes, it checks that the tag matches `package.json`, publishes to npm through Trusted Publishing (OIDC, with provenance), and creates a GitHub Release with generated notes.
 
