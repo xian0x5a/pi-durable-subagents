@@ -62,9 +62,11 @@ On Linux with writable cgroup-v2 support, the existing cgroup and guardian conta
 
 ## Releasing
 
-Pull requests and `main` pushes run no CI; the Release workflow is the only automated gate. It runs `typecheck` and `test:ci` on Node 22, the engines floor; local development covers newer Node. `test:ci` is the fast suite with a 15-second file timeout and an 8-minute deadline, because shared runners can be several times slower than a development machine. Run `npm run test:process` locally before a release you cut by hand; it launches real Pi processes and stays out of CI. [Pi upgrades](pi-upgrade.md) are automated and release without it.
+Pull requests and `main` pushes run no CI; the Release workflow is the only automated gate. It runs `typecheck` and `test:ci` on Node 22, the engines floor; local development covers newer Node. `test:ci` is the fast suite with a 15-second file timeout and an 8-minute deadline, because shared runners can be several times slower than a development machine. Run `npm run test:process` locally before merging a pull request labelled for release; it launches real Pi processes and stays out of CI. [Pi upgrades](pi-upgrade.md) are automated and release without it.
 
-Pushing a stable version tag (`X.Y.Z` or `vX.Y.Z`; pre-release tags are ignored) runs the Release workflow. After the Node 22 gate passes, it checks that the tag matches `package.json`, publishes to npm through Trusted Publishing (OIDC, with provenance), and creates a GitHub Release with generated notes.
+To release a pull request, label it `release:patch` or `release:minor` before merging. When it merges, the Release on merge workflow runs `npm version` on `main`, pushes the version commit and tag, and starts the Release workflow on that tag. It starts the workflow explicitly because a tag pushed with a workflow's own token triggers no other workflow. A failed release opens an issue, since no person started that run. If the Release on merge job itself fails after pushing, rerun it: it reuses the tag instead of bumping again.
+
+Pushing a stable version tag (`X.Y.Z` or `vX.Y.Z`; pre-release tags are ignored) by hand also runs the Release workflow. After the Node 22 gate passes, it checks that the tag matches `package.json`, publishes to npm through Trusted Publishing (OIDC, with provenance), and creates a GitHub Release with generated notes.
 
 ```bash
 npm version patch   # bumps package.json and package-lock.json, commits, tags vX.Y.Z

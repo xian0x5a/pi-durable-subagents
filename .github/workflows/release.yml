@@ -7,6 +7,9 @@ on:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
       - '[0-9]+.[0-9]+.[0-9]+'
+  # Started on a tag by the Release on merge workflow. The tag check below
+  # refuses any other ref before anything is published.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -44,6 +47,12 @@ jobs:
           package-manager-cache: false
       - name: Check tag matches package version
         run: |
+          # A dispatch bypasses the push filter above, so recheck that the ref
+          # is a stable version tag.
+          if [ "${GITHUB_REF_TYPE}" != tag ] || ! [[ "${GITHUB_REF_NAME}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::${GITHUB_REF_NAME} is not a stable version tag"
+            exit 1
+          fi
           package_version="$(node -p 'require("./package.json").version')"
           if [ "${GITHUB_REF_NAME#v}" != "${package_version}" ]; then
             echo "::error::Tag ${GITHUB_REF_NAME} does not match package.json version ${package_version}"
@@ -60,5 +69,21 @@ jobs:
             npm publish
           fi
       - run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  # The Release on merge workflow starts this run with its own token, so no
+  # person is notified of a failure; an issue is.
+  report-failure:
+    needs: [check, publish]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - run: >-
+          gh issue create --repo "$GITHUB_REPOSITORY"
+          --title "Release ${GITHUB_REF_NAME} failed"
+          --body "The Release workflow failed: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
         env:
           GH_TOKEN: ${{ github.token }}

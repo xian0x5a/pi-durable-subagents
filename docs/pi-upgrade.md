@@ -5,9 +5,9 @@ Pi releases every few days, so upgrades are automated:
 1. Dependabot (`.github/dependabot.yml`) checks npm hourly from 05:07 to 19:07 Pacific and opens one PR bumping the four `@earendil-works/pi-*` devDependencies.
 2. The **Pi upgrade** Claude Code routine runs on that PR and follows the procedure below. Its GitHub trigger is `pull_request.opened`, filtered to author `dependabot[bot]` and a title containing `the pi group`. Its prompt:
 
-   > Follow docs/pi-upgrade.md for the pull request that triggered this run. You may push to that pull request's head branch, merge it, push the version commit to main, and create the release tag, as the procedure describes.
+   > Follow docs/pi-upgrade.md for the pull request that triggered this run. You may push to that pull request's head branch, label it, and merge it, as the procedure describes.
 
-The agent merges only when it is confident, and publishes a release only when the upgrade changed `src/`. Anything else stays open for a human, with the reason in a PR comment.
+The agent merges only when it is confident; anything else stays open for a human, with the reason in a PR comment. When the upgrade changed `src/`, the agent labels the PR for release, and merging it publishes a release (see [Development](development.md#releasing)).
 
 When a newer Pi release arrives while a Pi PR is open, Dependabot closes that PR as superseded and opens a new one, which starts a new run. That run carries over the fixes from the closed PR.
 
@@ -15,10 +15,9 @@ To pause, switch the routine off at claude.ai/code/routines. To stop the PRs too
 
 ## Procedure
 
-The run starts on the Dependabot PR's head commit in a Claude Code cloud session. Three limits of that environment shape the steps:
+The run starts on the Dependabot PR's head commit in a Claude Code cloud session. Two limits of that environment shape the steps:
 
 - `gh pr` and `gh issue` use GraphQL, which the session's GitHub proxy rejects. Use the REST API through `gh api repos/xian0x5a/pi-durable-subagents/...`.
-- The proxy rejects tag pushes. Create the release tag through the REST API.
 - Only this repository is reachable through GitHub. Read Pi's changes from its published changelog instead.
 
 If a step cannot be completed, stop, and comment on the PR with what failed and what remains to be done by hand.
@@ -50,7 +49,7 @@ Raise the `peerDependencies` floor to the new version only when `src/` now needs
 
 ### 4. Check
 
-Run `npm run typecheck`, `npm run test:ci`, and `npm run test:conformance`. The conformance suite launches real Pi processes and can run for many minutes on a slow machine; give it a long timeout or run it in the background. The rest of the process suite is not run here, so automated releases go out without it (see [Development](development.md#releasing)).
+Run `npm run typecheck`, `npm run test:ci`, and `npm run test:conformance`. The conformance suite launches real Pi processes and can run for many minutes on a slow machine; give it a long timeout or run it in the background. The rest of the process suite is not run here, so releases from these PRs go out without it.
 
 If a check fails, find out whether the new Pi causes it. Check out `origin/main` in a separate worktree, run `npm ci` there so it uses the old Pi, and rerun the failing check. A failure that also happens there, for the same reason, is pre-existing: it does not block this PR, but file an issue for it. A failure that happens only with the new Pi blocks the merge until it is fixed.
 
@@ -70,6 +69,14 @@ gh api repos/xian0x5a/pi-durable-subagents/issues -f title='<title>' -f body='<b
 
 ### 6. Decide
 
+When `src/` changed, label the PR for release, so that merging it publishes one. Use `release:minor` if you raised the `peerDependencies` floor, since users on older Pi can no longer install the new version; otherwise use `release:patch`. Label it even if you will not merge, so the human who does gets the release too.
+
+```bash
+gh api repos/xian0x5a/pi-durable-subagents/issues/<number>/labels -f 'labels[]=release:patch'
+```
+
+A version-only bump gets no label: it changes nothing for users, since npm does not install devDependencies and the peer range already admits the new Pi.
+
 Merge only when all of these hold:
 
 - the checks pass, apart from failures step 4 shows are pre-existing;
@@ -88,21 +95,4 @@ Stop if the PR has been closed in the meantime. Merge exactly the commit you che
 gh api -X PUT repos/xian0x5a/pi-durable-subagents/pulls/<number>/merge -f merge_method=merge -f sha="$(git rev-parse HEAD)"
 ```
 
-If `src/` did not change, stop here. A devDependency bump changes nothing for users: npm does not install devDependencies, and the peer range already admits the new Pi.
-
-### 8. Release
-
-When `src/` changed, publish a release. Bump the minor version if the `peerDependencies` floor was raised, since users on older Pi can no longer install it; otherwise bump the patch version. Start from a clean working tree, and commit only the version files:
-
-```bash
-git fetch origin main
-git checkout -B main origin/main
-test -z "$(git status --porcelain)"
-npm version <minor|patch> --no-git-tag-version
-version="$(node -p 'require("./package.json").version')"
-git commit -m "${version}" -- package.json package-lock.json
-git push origin main
-gh api repos/xian0x5a/pi-durable-subagents/git/refs -f ref="refs/tags/v${version}" -f sha="$(git rev-parse HEAD)"
-```
-
-The tag starts the Release workflow, which publishes to npm. Wait for its run to finish (`gh api -X GET 'repos/xian0x5a/pi-durable-subagents/actions/runs?head_sha=<sha>'`), then add a final PR comment linking it. If it fails, file an issue with the run link.
+A labelled merge starts the Release on merge workflow, which bumps the version, tags it, and publishes.
