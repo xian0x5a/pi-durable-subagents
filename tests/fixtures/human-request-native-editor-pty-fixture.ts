@@ -11,6 +11,7 @@ import { installAgentActivityDock } from "../../src/presentation/agent-activity-
 import { registerCoordinationTools } from "../../src/tools/coordination-tools.ts";
 import type { OrdinaryAgentCoordinatorView } from "../../src/coordination/workflow-coordinator.ts";
 import type { HumanAnswerCandidate } from "../../src/protocol/human-request.ts";
+import { adoptOrValidateOwnerIdentity } from "../../src/protocol/owner-identity.ts";
 import { createManuallyManagedUnboundTestOwnerHost } from "../support/pi-host.ts";
 
 const QUESTION =
@@ -100,6 +101,8 @@ const view = {
 	refreshTranscriptFacts() {},
 	async reachSafeBoundary() {},
 	async beginExecution() {},
+	obligationFrames: () => [],
+	isShuttingDown: () => false,
 	assertNotShutDownOrSuspended() {},
 	beginToolExecution() {},
 	reconcileCommittedToolResults() {},
@@ -121,6 +124,8 @@ const extension: ExtensionFactory = (pi) => {
 };
 
 const host = await createManuallyManagedUnboundTestOwnerHost(extension);
+// Participant lifecycle hooks scope replay inspection to the session's current Identity.
+adoptOrValidateOwnerIdentity(host.runtime);
 host.model.setResponses([
 	fauxAssistantMessage(
 		fauxToolCall("ask_user", { question: QUESTION }, { id: "pty-ask-user" }),
