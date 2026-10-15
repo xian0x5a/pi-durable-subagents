@@ -25,6 +25,8 @@ If a step cannot be completed, stop, and comment on the PR with what failed and 
 
 ### 1. Prepare
 
+Confirm the triggering PR is open, was opened by `dependabot[bot]`, and has `the pi group` in its title. If not, stop without commenting: the routine's trigger filter is misconfigured, and this PR is not yours to touch.
+
 Run `git fetch origin main`. Check that `node --version` meets `engines.node` in `package.json`, then run `npm ci`.
 
 Look for a Pi PR that Dependabot closed as superseded by this one. If it has commits not authored by Dependabot, cherry-pick them onto this branch, and read its comments for decisions already made.
