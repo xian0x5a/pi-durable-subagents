@@ -1,0 +1,62 @@
+name: Release on merge
+
+# Merging a pull request labelled `release:patch` or `release:minor` bumps the
+# version, tags it, and starts the Release workflow. See docs/development.md.
+on:
+  # pull_request_target runs this file from main and grants a writable token
+  # even for pull requests from forks; nothing here checks out the PR's code.
+  pull_request_target:
+    types: [closed]
+    branches: [main]
+
+# Merges release one after another. queue: max keeps every waiting run; by
+# default a newer run cancels a waiting one, losing its release. (actionlint
+# does not know this key yet.)
+concurrency:
+  group: release-on-merge
+  queue: max
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    if: >-
+      github.event.pull_request.merged &&
+      (contains(github.event.pull_request.labels.*.name, 'release:patch') ||
+       contains(github.event.pull_request.labels.*.name, 'release:minor'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the version commit and tag
+      actions: write # start the Release workflow
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Bump the version and tag it
+        id: bump
+        env:
+          RELEASE_KIND: ${{ contains(github.event.pull_request.labels.*.name, 'release:minor') && 'minor' || 'patch' }}
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          version="$(node -p 'require("./package.json").version')"
+          # A rerun after the push succeeded finds its own version commit and
+          # tag on main; bumping again would skip a version.
+          if [ "$(git log -1 --format=%s)" = "${version}" ] && git ls-remote --exit-code --tags origin "refs/tags/v${version}" > /dev/null; then
+            tag="v${version}"
+          else
+            tag="$(npm version "${RELEASE_KIND}" --message '%s')"
+            git push --atomic origin HEAD:main "${tag}"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+      # A tag pushed with the workflow token starts no other workflow, but a
+      # workflow_dispatch does, so start the Release workflow explicitly.
+      - name: Start the Release workflow
+        run: gh workflow run release.yml --ref "${{ steps.bump.outputs.tag }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
