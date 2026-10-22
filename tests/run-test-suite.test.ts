@@ -112,13 +112,15 @@ test("direct process-test execution isolates Pi settings inherited from a spawne
 	timeout: PROCESS_TEST_TIMEOUT_MS,
 	skip: process.platform === "win32",
 }, async (t) => {
-	await assertPiSettingsRemainUnchanged(t, [
+	const output = await assertPiSettingsRemainUnchanged(t, [
 		"--test",
 		"--test-concurrency=1",
 		"--test-reporter=spec",
 		"--test-name-pattern=the common Runtime Host supervises",
 		"tests/pi-child-hosted-runtime.test.ts",
 	]);
+	// Direct execution bypasses the suite runner's check that a name pattern selected tests.
+	assert.match(output, /^ℹ tests [1-9]/m);
 });
 
 test("the suite does not expose inherited provider credentials to Pi in test processes", {
@@ -445,7 +447,7 @@ test("abandons temporary directories", async () => {
 async function assertPiSettingsRemainUnchanged(
 	t: TestContext,
 	arguments_: readonly string[],
-): Promise<void> {
+): Promise<string> {
 	const inheritedAgentDir = await mkdtemp(join(tmpdir(), "pi-inherited-agent-dir-"));
 	const settingsPath = join(inheritedAgentDir, "settings.json");
 	const originalSettings = `${JSON.stringify({
@@ -472,6 +474,7 @@ async function assertPiSettingsRemainUnchanged(
 
 	assert.equal(outcome.code, 0, outcome.output);
 	assert.equal(await readFile(settingsPath, "utf8"), originalSettings);
+	return outcome.output;
 }
 
 type ProcessEvidence = Readonly<{

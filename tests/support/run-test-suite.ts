@@ -155,7 +155,9 @@ try {
 		"--test-force-exit",
 		"--test-reporter=dot",
 		"--test-reporter-destination=stdout",
-		`--test-reporter=${fileURLToPath(new URL("./executed-test-count-reporter.ts", import.meta.url))}`,
+		// A URL, not a path: Node imports custom reporters through the ESM loader,
+		// which reads a Windows path's drive letter as a URL scheme.
+		`--test-reporter=${new URL("./executed-test-count-reporter.ts", import.meta.url).href}`,
 		`--test-reporter-destination=${executedTestCountFile}`,
 		...forwardedArguments,
 		...selectedFiles,
