@@ -121,6 +121,31 @@ test("direct process-test execution isolates Pi settings inherited from a spawne
 	]);
 });
 
+test("the suite does not expose inherited provider credentials to Pi in test processes", {
+	timeout: PROCESS_TEST_TIMEOUT_MS,
+	skip: process.platform === "win32",
+}, async () => {
+	const environment: NodeJS.ProcessEnv = {
+		...process.env,
+		// Pi treats a provider with a key variable as authenticated, which would crowd
+		// the fake provider out of the model list this test reads.
+		ANTHROPIC_API_KEY: "dummy-anthropic-key",
+		OPENAI_API_KEY: "dummy-openai-key",
+		PI_SKIP_VERSION_CHECK: "1",
+	};
+	delete environment.NODE_TEST_CONTEXT;
+	// Model a developer or CI shell starting the suite, not the test process that launches this probe.
+	delete environment[PI_TEST_ENVIRONMENT_MARKER];
+	const outcome = await runCommand(process.execPath, [
+		"tests/support/run-test-suite.ts",
+		"process",
+		"--file=owner-bootstrap.test.ts",
+		"--test-name-pattern=models toggles durable",
+	], { cwd: PROJECT_ROOT, env: environment });
+
+	assert.equal(outcome.code, 0, outcome.output);
+});
+
 test("a test file fails when its tests leave a handle open, naming where it was created", {
 	timeout: SUPERVISOR_TEST_TIMEOUT_MS,
 }, async (t) => {
