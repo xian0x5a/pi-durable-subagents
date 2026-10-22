@@ -279,6 +279,40 @@ test("a Moderator bootstrap can recover through native /new", async (t) => {
 	await host.runtime.dispose();
 });
 
+test("a blocked Owner keeps its tools inactive across /tree navigation", async (t) => {
+	const host = await createUnboundTestOwnerHost(t, piAgentCoordination);
+	host.session.sessionManager.appendCustomMessageEntry(
+		"agent-coordination.moderator-input",
+		"{}",
+		true,
+		{
+			agentId: host.session.sessionId,
+			workflowId: "workflow-owner",
+			creationPreset: null,
+			metadata: {
+				label: "Moderator",
+				description: "run failure",
+			},
+		},
+	);
+	await bindTestOwnerHost(host, "tui");
+	host.model.setResponses([
+		fauxAssistantMessage("First reply."),
+		fauxAssistantMessage("Second reply."),
+	]);
+	await host.session.prompt("First prompt.");
+	await host.session.prompt("Second prompt.");
+	const firstReply = host.session.sessionManager
+		.getBranch()
+		.find((entry) => entry.type === "message" && entry.message.role === "assistant");
+	assert.ok(firstReply);
+
+	await host.session.navigateTree(firstReply.id, { summarize: false });
+
+	assertOwnerToolsRegisteredButInactive(host);
+	await host.runtime.dispose();
+});
+
 test("a resumed Owner admits coordination evidence after its Identity cutoff", async (t) => {
 	const host = await createUnboundTestOwnerHost(t, piAgentCoordination, { persistent: true });
 	await bindTestOwnerHost(host, "tui");
