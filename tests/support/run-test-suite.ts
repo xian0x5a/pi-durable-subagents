@@ -1,4 +1,5 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -138,17 +139,35 @@ const concurrency = suite === "fast"
 const timeoutMs = suite === "fast"
 	? FAST_TEST_TIMEOUT_MS
 	: PROCESS_TEST_TIMEOUT_MS;
-process.exitCode = await runTestProcess([
-	"--test",
-	`--test-concurrency=${concurrency}`,
-	`--test-timeout=${timeoutMs}`,
-	// Node marks a timed-out test failed but waits forever for its file's
-	// process while any handle keeps it alive, holding the suite until the
-	// supervisor deadline. Exit each file once its tests finish or time out.
-	"--test-force-exit",
-	"--test-reporter=dot",
-	...forwardedArguments,
-	...selectedFiles,
-], deadlineOverride === undefined
-	? Math.ceil(selectedFiles.length / concurrency) * timeoutMs + SUITE_STARTUP_ALLOWANCE_MS
-	: Number(deadlineOverride));
+// A name pattern that selects nothing exits 0 and prints the same "." as one
+// passing test, so a typo or a renamed test would silently run nothing. A second
+// reporter counts the tests that ran; a run of zero fails.
+const executedTestCountDirectory = mkdtempSync(join(tmpdir(), "pi-test-count-"));
+const executedTestCountFile = join(executedTestCountDirectory, "count");
+try {
+	const exitCode = await runTestProcess([
+		"--test",
+		`--test-concurrency=${concurrency}`,
+		`--test-timeout=${timeoutMs}`,
+		// Node marks a timed-out test failed but waits forever for its file's
+		// process while any handle keeps it alive, holding the suite until the
+		// supervisor deadline. Exit each file once its tests finish or time out.
+		"--test-force-exit",
+		"--test-reporter=dot",
+		"--test-reporter-destination=stdout",
+		`--test-reporter=${fileURLToPath(new URL("./executed-test-count-reporter.ts", import.meta.url))}`,
+		`--test-reporter-destination=${executedTestCountFile}`,
+		...forwardedArguments,
+		...selectedFiles,
+	], deadlineOverride === undefined
+		? Math.ceil(selectedFiles.length / concurrency) * timeoutMs + SUITE_STARTUP_ALLOWANCE_MS
+		: Number(deadlineOverride));
+	if (exitCode === 0 && Number(readFileSync(executedTestCountFile, "utf8")) === 0) {
+		console.error("No tests match the selected files and test name pattern");
+		process.exitCode = 1;
+	} else {
+		process.exitCode = exitCode;
+	}
+} finally {
+	rmSync(executedTestCountDirectory, { recursive: true, force: true });
+}

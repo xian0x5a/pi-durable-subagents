@@ -146,6 +146,28 @@ test("the suite does not expose inherited provider credentials to Pi in test pro
 	assert.equal(outcome.code, 0, outcome.output);
 });
 
+test("the suite fails a run whose test name pattern selects no tests", {
+	timeout: PROCESS_TEST_TIMEOUT_MS,
+	skip: process.platform === "win32",
+}, async () => {
+	const environment: NodeJS.ProcessEnv = { ...process.env, PI_SKIP_VERSION_CHECK: "1" };
+	delete environment.NODE_TEST_CONTEXT;
+	delete environment[PI_TEST_ENVIRONMENT_MARKER];
+	const runWithPattern = (pattern: string) => runCommand(process.execPath, [
+		"tests/support/run-test-suite.ts",
+		"process",
+		"--file=owner-bootstrap.test.ts",
+		`--test-name-pattern=${pattern}`,
+	], { cwd: PROJECT_ROOT, env: environment });
+
+	const matching = await runWithPattern("models toggles durable");
+	assert.equal(matching.code, 0, matching.output);
+
+	const empty = await runWithPattern("zzz-matches-no-test");
+	assert.notEqual(empty.code, 0, empty.output);
+	assert.match(empty.output, /no tests? match/i);
+});
+
 test("a test file fails when its tests leave a handle open, naming where it was created", {
 	timeout: SUPERVISOR_TEST_TIMEOUT_MS,
 }, async (t) => {
