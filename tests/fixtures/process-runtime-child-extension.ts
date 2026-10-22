@@ -242,9 +242,9 @@ const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 		},
 	});
 	pi.registerCommand("runtime-activate", {
-		description: "Activate a registered tool after initial admission",
-		async handler(_args, ctx) {
-			pi.setActiveTools([...pi.getActiveTools(), "runtime_sequential_probe"]);
+		description: "Activate a registered tool (default runtime_sequential_probe) after initial admission",
+		async handler(args, ctx) {
+			pi.setActiveTools([...pi.getActiveTools(), args.trim() || "runtime_sequential_probe"]);
 			ctx.ui.setWidget("process-runtime-activated", ["PROCESS_RUNTIME_TOOL_ACTIVATED"]);
 		},
 	});

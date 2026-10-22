@@ -1302,23 +1302,28 @@ for (const scenario of STARTUP_TOOL_FILTER_SCENARIOS) {
 // branch's recorded loadout never mentions, and a startup exclusion is never
 // recorded as a removal (issue #256). Pi's /reload re-activates every extension
 // tool that is active on registration. A native re-enable that a Run recorded is
-// the branch's own state and survives.
+// the branch's own state and survives; a withheld coordination tool follows the
+// Runtime's interaction mode instead.
+const EXCLUDED_PROBE = { tool: "runtime_sequential_probe", interaction: "terminal" } as const;
 // Two Runs record the loadout on the branch and give /tree an earlier entry to return to.
 const RECORDED_RUNS_THEN_TREE = ["run", "run", "tree"] as const;
 for (const scenario of [
 	{
+		...EXCLUDED_PROBE,
 		name: "an excluded extension tool stays inactive across /tree navigation",
 		reEnableFirst: false,
 		steps: RECORDED_RUNS_THEN_TREE,
 		expectedActive: false,
 	},
 	{
+		...EXCLUDED_PROBE,
 		name: "an excluded tool re-enabled and recorded by a Run stays active across /tree navigation",
 		reEnableFirst: true,
 		steps: RECORDED_RUNS_THEN_TREE,
 		expectedActive: true,
 	},
 	{
+		...EXCLUDED_PROBE,
 		name: "an excluded extension tool stays inactive across /reload",
 		reEnableFirst: false,
 		steps: ["reload"],
@@ -1326,9 +1331,18 @@ for (const scenario of [
 	},
 	{
 		// A Run after the reload records whatever the reload activated, which /tree then honours.
+		...EXCLUDED_PROBE,
 		name: "an excluded extension tool stays inactive across /reload, a recorded Run, and /tree",
 		reEnableFirst: false,
 		steps: ["reload", ...RECORDED_RUNS_THEN_TREE],
+		expectedActive: false,
+	},
+	{
+		name: "a withheld human-only tool re-enabled and recorded by a Run stays inactive across /reload",
+		tool: "ask_user",
+		interaction: "headless",
+		reEnableFirst: true,
+		steps: ["run", "reload"],
 		expectedActive: false,
 	},
 ] as const) test(`startup tool filter: ${scenario.name}`, {
@@ -1349,13 +1363,14 @@ for (const scenario of [
 		timestamp: new Date().toISOString(),
 		cwd,
 	})}\n`, { mode: 0o600 });
-	const excludedTool = "runtime_sequential_probe";
+	const filteredTool = scenario.tool;
 	let runtime: PiChildProcessRuntime | undefined;
 	try {
 		runtime = await PiChildProcessRuntime.start({
 			workflowId: "process-tool-filter-tree-workflow",
 			agentId: "process-tool-filter-tree-agent",
 			role: "ordinary",
+			interaction: scenario.interaction,
 			expectedSessionId,
 			sessionPath,
 			configuration: {
@@ -1365,7 +1380,7 @@ for (const scenario of [
 					modelId: PROCESS_RUNTIME_TEST_MODEL,
 				},
 				thinking: "off",
-				excludeTools: [excludedTool],
+				excludeTools: [EXCLUDED_PROBE.tool],
 				excludeSkills: [],
 				skills: [],
 				extensions: [CHILD_EXTENSION],
@@ -1384,9 +1399,9 @@ for (const scenario of [
 		startedRuntime.onEvent((event: ControlEvent<ChildToOwnerControl>) => {
 			if (event.event === "agent.settled") settledRuns += 1;
 		});
-		assert.equal(startedRuntime.snapshot.tools.includes(excludedTool), false);
+		assert.equal(startedRuntime.snapshot.tools.includes(filteredTool), false);
 		if (scenario.reEnableFirst) {
-			startedRuntime.writeInput("/runtime-activate\r");
+			startedRuntime.writeInput(`/runtime-activate ${filteredTool}\r`);
 			await waitForFrame(startedRuntime, "PROCESS_RUNTIME_TOOL_ACTIVATED");
 		}
 		for (const [index, step] of scenario.steps.entries()) {
@@ -1409,9 +1424,9 @@ for (const scenario of [
 
 		const { tools } = await startedRuntime.channel.request("runtime.snapshot", {});
 		assert.equal(
-			tools.includes(excludedTool),
+			tools.includes(filteredTool),
 			scenario.expectedActive,
-			`excluded tool activation after ${scenario.steps.join(", ")}: ${JSON.stringify(tools)}`,
+			`${filteredTool} activation after ${scenario.steps.join(", ")}: ${JSON.stringify(tools)}`,
 		);
 	} finally {
 		await runtime?.dispose();
