@@ -1,3 +1,4 @@
+import { getCurrentTools } from "@earendil-works/pi-ai";
 import * as hostPi from "@earendil-works/pi-coding-agent";
 import type {
 	AgentSession,
@@ -97,6 +98,8 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	};
 	pi.on("thinking_level_select", (_event, ctx) => endPresetThinking(ctx.model, ctx));
 	pi.on("model_select", (event, ctx) => endPresetThinking(event.previousModel, ctx));
+	// The bridge is the first child extension, so this runs before other extensions'
+	// session_tree handlers; their later activation changes remain native Runtime behavior.
 	pi.on("session_tree", (_event, ctx) =>
 		deactivateStartupFilteredToolsAfterTree(pi, bootstrap, ctx.sessionManager.getBranch())
 	);
@@ -245,9 +248,9 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			input: exactBinding.handleInput,
 			async completeStartup() {
 				try {
-					applyStartupToolFilter(pi, bootstrap, retained !== undefined);
+					applyStartupToolFilter(pi, bootstrap, ctx.sessionManager.getBranch(), retained !== undefined);
 					await exactBinding.publishRuntimeSnapshot();
-					// Reload reports current state but does not re-enforce the initial selection.
+					// Only the first startup announces completion; reload republishes the snapshot above.
 					if (!retained) {
 						await channel.sendEvent("runtime.startupComplete", await exactBinding.runtimeSnapshot());
 					}
@@ -354,61 +357,68 @@ async function readExplicitSystemPrompt(
 }
 
 type StartupToolFilterBootstrap = Pick<ChildProcessBootstrap, "role" | "excludedTools" | "interaction">;
+type SessionBranch = ReturnType<hostPi.ExtensionContext["sessionManager"]["getBranch"]>;
 
 /**
  * Applies the Spawn and Template exclusion filter to the child surface after
  * inherited startup handlers ran, and keeps the role coordination tools active so
- * a filtered or rewired child can still answer. Reload preserves native changes
- * and only re-asserts participation. Absent names are ignored.
+ * a filtered or rewired child can still answer. Absent names are ignored.
+ * Pi 1.4.0 /reload re-activates every extension tool, so reload re-asserts the
+ * filter too, except for tools the branch recorded active: a native change a Run
+ * recorded is the branch's own state.
  */
 function applyStartupToolFilter(
 	pi: ExtensionAPI,
 	bootstrap: StartupToolFilterBootstrap,
+	branch: SessionBranch,
 	retained: boolean,
 ): void {
-	const { roleTools, activeTools } = coordinationToolActivation(bootstrap.role, bootstrap.interaction);
-	const withheldTools = new Set<string>(roleTools.filter((name) => !activeTools.includes(name)));
-	const excludedNames = new Set(retained ? [] : bootstrap.excludedTools);
-	pi.setActiveTools([...new Set([
-		...pi.getActiveTools().filter((name) => !excludedNames.has(name)),
-		...activeTools,
-	])].filter((name) => !withheldTools.has(name)));
-}
-
-/** The tools the initial startup filter switches off: exclusions and withheld coordination tools. */
-function startupFilteredTools(
-	bootstrap: StartupToolFilterBootstrap,
-): ReadonlySet<string> {
-	const { roleTools, activeTools } = coordinationToolActivation(bootstrap.role, bootstrap.interaction);
-	const keptActive = new Set<string>(activeTools);
-	return new Set([
-		...bootstrap.excludedTools.filter((name) => !keptActive.has(name)),
-		...roleTools.filter((name) => !keptActive.has(name)),
-	]);
+	const { activeTools } = coordinationToolActivation(bootstrap.role, bootstrap.interaction);
+	const recordedActive = retained ? recordedActiveTools(branch) ?? new Set<string>() : new Set<string>();
+	pi.setActiveTools(withoutUnrecordedFilteredTools(
+		[...new Set([...pi.getActiveTools(), ...activeTools])],
+		bootstrap,
+		recordedActive,
+	));
 }
 
 /**
  * Pi 1.4.0 /tree restores the tool loadout recorded on the new branch and activates
  * registered extension tools the branch never mentions, as if newly registered. The
- * startup filter runs before any Run records a loadout, so its switched-off tools are
- * never mentioned and come back. Undo exactly that: a mentioned tool already follows
- * its recorded, possibly user-changed state, and a branch without recorded loadout
- * keeps the current tools in Pi too.
+ * startup filter runs before any Run records a loadout, so its switched-off tools come
+ * back. Undo exactly that: a recorded tool already follows its recorded, possibly
+ * user-changed state, and Pi keeps the current tools on a branch with no recorded loadout.
  */
 function deactivateStartupFilteredToolsAfterTree(
 	pi: ExtensionAPI,
 	bootstrap: StartupToolFilterBootstrap,
-	branch: ReturnType<hostPi.ExtensionContext["sessionManager"]["getBranch"]>,
+	branch: SessionBranch,
 ): void {
+	const recordedActive = recordedActiveTools(branch);
+	if (recordedActive === undefined) return;
+	pi.setActiveTools(withoutUnrecordedFilteredTools(pi.getActiveTools(), bootstrap, recordedActive));
+}
+
+/** Drops the startup-filtered tools from `names` unless the branch recorded them active. */
+function withoutUnrecordedFilteredTools(
+	names: readonly string[],
+	bootstrap: StartupToolFilterBootstrap,
+	recordedActive: ReadonlySet<string>,
+): string[] {
+	const { roleTools, activeTools } = coordinationToolActivation(bootstrap.role, bootstrap.interaction);
+	const keptActive = new Set<string>(activeTools);
+	// Exclusions never switch off the role's active coordination tools; its withheld ones count as filtered.
+	const filtered = new Set([...bootstrap.excludedTools, ...roleTools].filter((name) => !keptActive.has(name)));
+	return names.filter((name) => !filtered.has(name) || recordedActive.has(name));
+}
+
+/** The active tools the branch's recorded loadout yields, as Pi restores it, or undefined when no Run recorded one. */
+function recordedActiveTools(branch: SessionBranch): ReadonlySet<string> | undefined {
 	const systemMessages = branch.flatMap((entry) =>
 		entry.type === "message" && entry.message.role === "system" ? [entry.message] : []
 	);
-	if (systemMessages.length === 0) return;
-	const mentioned = new Set(systemMessages
-		.flatMap((message) => [...(message.toolsAdded ?? []), ...(message.toolsRemoved ?? [])])
-		.map((tool) => tool.name));
-	const filtered = startupFilteredTools(bootstrap);
-	pi.setActiveTools(pi.getActiveTools().filter((name) => !filtered.has(name) || mentioned.has(name)));
+	if (systemMessages.length === 0) return undefined;
+	return new Set(getCurrentTools(systemMessages).map((tool) => tool.name));
 }
 
 function assertExpectedSession(runtime: AgentSessionRuntime, bootstrap: ChildProcessBootstrap): void {

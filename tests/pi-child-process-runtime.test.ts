@@ -1300,12 +1300,38 @@ for (const scenario of STARTUP_TOOL_FILTER_SCENARIOS) {
 
 // Pi 1.4.0 /tree navigation re-activates registered extension tools that the
 // branch's recorded loadout never mentions, and a startup exclusion is never
-// recorded as a removal (issue #256). A native re-enable that a Run recorded is
+// recorded as a removal (issue #256). Pi's /reload re-activates every extension
+// tool that is active on registration. A native re-enable that a Run recorded is
 // the branch's own state and survives.
+// Two Runs record the loadout on the branch and give /tree an earlier entry to return to.
+const RECORDED_RUNS_THEN_TREE = ["run", "run", "tree"] as const;
 for (const scenario of [
-	{ name: "an excluded extension tool stays inactive", reEnableBeforeRuns: false },
-	{ name: "an excluded tool re-enabled and recorded by a Run stays active", reEnableBeforeRuns: true },
-] as const) test(`startup tool filter: ${scenario.name} across /tree navigation`, {
+	{
+		name: "an excluded extension tool stays inactive across /tree navigation",
+		reEnableFirst: false,
+		steps: RECORDED_RUNS_THEN_TREE,
+		expectedActive: false,
+	},
+	{
+		name: "an excluded tool re-enabled and recorded by a Run stays active across /tree navigation",
+		reEnableFirst: true,
+		steps: RECORDED_RUNS_THEN_TREE,
+		expectedActive: true,
+	},
+	{
+		name: "an excluded extension tool stays inactive across /reload",
+		reEnableFirst: false,
+		steps: ["reload"],
+		expectedActive: false,
+	},
+	{
+		// A Run after the reload records whatever the reload activated, which /tree then honours.
+		name: "an excluded extension tool stays inactive across /reload, a recorded Run, and /tree",
+		reEnableFirst: false,
+		steps: ["reload", ...RECORDED_RUNS_THEN_TREE],
+		expectedActive: false,
+	},
+] as const) test(`startup tool filter: ${scenario.name}`, {
 	timeout: TEST_TIMEOUT_MS,
 	skip: process.platform === "win32",
 }, async () => {
@@ -1359,29 +1385,33 @@ for (const scenario of [
 			if (event.event === "agent.settled") settledRuns += 1;
 		});
 		assert.equal(startedRuntime.snapshot.tools.includes(excludedTool), false);
-		if (scenario.reEnableBeforeRuns) {
+		if (scenario.reEnableFirst) {
 			startedRuntime.writeInput("/runtime-activate\r");
 			await waitForFrame(startedRuntime, "PROCESS_RUNTIME_TOOL_ACTIVATED");
 		}
-		// Two Runs record the loadout on the branch and give /tree an earlier entry to return to.
-		for (const deliveryId of ["tree-first-run", "tree-second-run"]) {
-			const settledBefore = settledRuns;
-			await startedRuntime.channel.request("message.deliver", {
-				deliveryId,
-				proveCommit: true,
-				delivery: { kind: "user", content: `Complete ${deliveryId}.` },
-			});
-			await waitUntil(() => settledRuns > settledBefore);
+		for (const [index, step] of scenario.steps.entries()) {
+			if (step === "run") {
+				const settledBefore = settledRuns;
+				await startedRuntime.channel.request("message.deliver", {
+					deliveryId: `tool-filter-run-${index}`,
+					proveCommit: true,
+					delivery: { kind: "user", content: `Complete step ${index}.` },
+				});
+				await waitUntil(() => settledRuns > settledBefore);
+			} else if (step === "tree") {
+				startedRuntime.writeInput("/runtime-tree\r");
+				await waitForFrame(startedRuntime, "PROCESS_RUNTIME_TREE_NAVIGATED");
+			} else {
+				startedRuntime.writeInput("/reload\r");
+				await waitForFrame(startedRuntime, "Reloaded keybindings");
+			}
 		}
-
-		startedRuntime.writeInput("/runtime-tree\r");
-		await waitForFrame(startedRuntime, "PROCESS_RUNTIME_TREE_NAVIGATED");
 
 		const { tools } = await startedRuntime.channel.request("runtime.snapshot", {});
 		assert.equal(
 			tools.includes(excludedTool),
-			scenario.reEnableBeforeRuns,
-			`excluded tool activation after /tree: ${JSON.stringify(tools)}`,
+			scenario.expectedActive,
+			`excluded tool activation after ${scenario.steps.join(", ")}: ${JSON.stringify(tools)}`,
 		);
 	} finally {
 		await runtime?.dispose();
