@@ -402,9 +402,11 @@ class ProcessTreeOwner implements ProcessOwner {
 
 function observeProcesses(): Map<number, ProcessObservation> {
 	const processes = new Map<number, ProcessObservation>();
-	for (const entry of readdirSync("/proc", { withFileTypes: true })) {
-		if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
-		const pid = Number(entry.name);
+	// Names only: /proc reports no dirent types, so withFileTypes would lstat each
+	// entry, and a process exiting between the listing and that lstat throws ENOENT.
+	for (const name of readdirSync("/proc")) {
+		if (!/^\d+$/.test(name)) continue;
+		const pid = Number(name);
 		try {
 			const fields = statFields(pid);
 			processes.set(pid, {

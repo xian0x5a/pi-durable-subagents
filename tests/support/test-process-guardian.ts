@@ -62,7 +62,9 @@ function sameProcess(pid: number, startTime: string): boolean {
 		const fields = statFields(pid);
 		return fields[19] === startTime && fields[0] !== "Z";
 	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+		// A process reaped between opening and reading its stat file fails with ESRCH.
+		const code = (error as NodeJS.ErrnoException).code;
+		if (code === "ENOENT" || code === "ESRCH") return false;
 		throw error;
 	}
 }
