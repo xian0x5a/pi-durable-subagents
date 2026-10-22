@@ -25,7 +25,7 @@ import {
 import { registerHerdrQuestionAttention } from "./pi-integration/herdr-question-attention.ts";
 import { VirtualModelRegistrar } from "./pi-integration/virtual-model-registration.ts";
 import { installInteractiveHostBridge } from "./pi-integration/interactive-host-bridge.ts";
-import { workflowInteractionForMode } from "./pi-integration/workflow-interaction.ts";
+import { type WorkflowInteraction, workflowInteractionForMode } from "./pi-integration/workflow-interaction.ts";
 import { registerMessageDeliveryRenderer } from "./tools/message-delivery-renderer.ts";
 import { registerAgentsCommand } from "./tools/agents-command.ts";
 import {
@@ -63,15 +63,22 @@ export const createOwnerExtension = (
 	// Pi reconstructs replacement transcripts before session_start. Register the
 	// official tool definitions now so historical calls receive their renderers.
 	const ownerTools = registerOwnerAgentTools(pi, () => admission.admittedOwnerView());
+	// Pi re-derives the active tools on /tree navigation and activates registered tools
+	// the branch never declared, so the last admission's activation is re-asserted there.
+	let reassertOwnerTools = () => undefined as void;
+	const setOwnerToolsActive = (interaction: WorkflowInteraction, admitted: boolean) => {
+		reassertOwnerTools = () => setOwnerAgentToolsActive(pi, interaction, admitted);
+		reassertOwnerTools();
+	};
 	const presentOutcome = (outcome: OwnerAdmissionOutcome, { ctx }: OwnerSessionStart) => {
 		const interaction = workflowInteractionForMode(ctx.mode);
 		switch (outcome.state) {
 			case "pending":
-				setOwnerAgentToolsActive(pi, interaction, false);
+				setOwnerToolsActive(interaction, false);
 				return;
 			case "admitted":
 				ownerTools.refreshSpawnGuidance(outcome.ownerView().agentTemplateSnapshot());
-				setOwnerAgentToolsActive(pi, interaction, true);
+				setOwnerToolsActive(interaction, true);
 				registerAgentsCommand(pi, {
 					kind: "admitted_owner",
 					view: outcome.ownerView,
@@ -83,7 +90,7 @@ export const createOwnerExtension = (
 				return;
 			case "blocked": {
 				const { failure } = outcome;
-				setOwnerAgentToolsActive(pi, interaction, false);
+				setOwnerToolsActive(interaction, false);
 				// A blocked Owner has no coordinator-backed commands. Keep diagnostics
 				// independent of that failed admission and out of restored chat history.
 				registerAgentsCommand(pi, { kind: "blocked_owner", failure });
@@ -115,6 +122,7 @@ export const createOwnerExtension = (
 	// Hold that turn until this exact Owner admission has settled.
 	pi.on("before_agent_start", () => admission.settled());
 	pi.on("session_start", (event, ctx) => admission.start({ event, ctx, sessionManager: ctx.sessionManager }));
+	pi.on("session_tree", () => reassertOwnerTools());
 	pi.on("session_before_fork", (_event, ctx) => {
 		const verdict = admission.nativeReplacementVerdict("fork");
 		if (verdict === "allow") return;
