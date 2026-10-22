@@ -26,6 +26,8 @@ npm run test:fast -- --file=host-shape.test.ts
 npm run test:conformance -- --file=host-shape.test.ts --list
 ```
 
+A run that executes no tests fails with "No tests match the selected files and test name pattern", so a mistyped or stale `--test-name-pattern` cannot pass silently.
+
 ## Where child Runtime tests live
 
 Test the Owner–child Control seam in one process through the Child Control Loopback (`tests/support/child-control-loopback.ts`): the real Owner-side proxy and Owner serving, a real child connection and binding, the in-memory transport, and a faux Pi session. Delivery, cancellation, interrupt, queue clearing, Moderator reminders, compaction, settlement, idle custom startup, faults, and reload continuity belong there, in the fast suite.
