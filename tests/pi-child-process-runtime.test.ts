@@ -1298,6 +1298,96 @@ for (const scenario of STARTUP_TOOL_FILTER_SCENARIOS) {
 	});
 }
 
+// Pi 1.4.0 /tree navigation re-activates registered extension tools that the
+// branch's recorded loadout never mentions, and a startup exclusion is never
+// recorded as a removal (issue #256). A native re-enable that a Run recorded is
+// the branch's own state and survives.
+for (const scenario of [
+	{ name: "an excluded extension tool stays inactive", reEnableBeforeRuns: false },
+	{ name: "an excluded tool re-enabled and recorded by a Run stays active", reEnableBeforeRuns: true },
+] as const) test(`startup tool filter: ${scenario.name} across /tree navigation`, {
+	timeout: TEST_TIMEOUT_MS,
+	skip: process.platform === "win32",
+}, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-child-tool-filter-tree-test-"));
+	const cwd = join(root, "work");
+	const sessionDirectory = join(root, "sessions");
+	const expectedSessionId = "019a6b4d-1b22-7000-8000-000000000011";
+	await mkdir(cwd, { recursive: true });
+	await mkdir(sessionDirectory, { recursive: true });
+	const sessionPath = join(sessionDirectory, "child.jsonl");
+	await writeFile(sessionPath, `${JSON.stringify({
+		type: "session",
+		version: 3,
+		id: expectedSessionId,
+		timestamp: new Date().toISOString(),
+		cwd,
+	})}\n`, { mode: 0o600 });
+	const excludedTool = "runtime_sequential_probe";
+	let runtime: PiChildProcessRuntime | undefined;
+	try {
+		runtime = await PiChildProcessRuntime.start({
+			workflowId: "process-tool-filter-tree-workflow",
+			agentId: "process-tool-filter-tree-agent",
+			role: "ordinary",
+			expectedSessionId,
+			sessionPath,
+			configuration: {
+				cwd,
+				model: {
+					provider: PROCESS_RUNTIME_TEST_PROVIDER,
+					modelId: PROCESS_RUNTIME_TEST_MODEL,
+				},
+				thinking: "off",
+				excludeTools: [excludedTool],
+				excludeSkills: [],
+				skills: [],
+				extensions: [CHILD_EXTENSION],
+				loadContextFiles: true,
+			},
+			skillPaths: [],
+			projectTrusted: true,
+			ownerEnvironment: { ...process.env, PI_SKIP_VERSION_CHECK: "1" },
+			runtimeDirectory: root,
+			ownerRequestHandlers: ordinaryOwnerHandlers({
+				selectorSnapshot: processSelectorSnapshot(expectedSessionId),
+			}),
+		});
+		const startedRuntime = runtime;
+		let settledRuns = 0;
+		startedRuntime.onEvent((event: ControlEvent<ChildToOwnerControl>) => {
+			if (event.event === "agent.settled") settledRuns += 1;
+		});
+		assert.equal(startedRuntime.snapshot.tools.includes(excludedTool), false);
+		if (scenario.reEnableBeforeRuns) {
+			startedRuntime.writeInput("/runtime-activate\r");
+			await waitForFrame(startedRuntime, "PROCESS_RUNTIME_TOOL_ACTIVATED");
+		}
+		// Two Runs record the loadout on the branch and give /tree an earlier entry to return to.
+		for (const deliveryId of ["tree-first-run", "tree-second-run"]) {
+			const settledBefore = settledRuns;
+			await startedRuntime.channel.request("message.deliver", {
+				deliveryId,
+				proveCommit: true,
+				delivery: { kind: "user", content: `Complete ${deliveryId}.` },
+			});
+			await waitUntil(() => settledRuns > settledBefore);
+		}
+
+		startedRuntime.writeInput("/runtime-tree\r");
+		await waitForFrame(startedRuntime, "PROCESS_RUNTIME_TREE_NAVIGATED");
+
+		const { tools } = await startedRuntime.channel.request("runtime.snapshot", {});
+		assert.equal(
+			tools.includes(excludedTool),
+			scenario.reEnableBeforeRuns,
+			`excluded tool activation after /tree: ${JSON.stringify(tools)}`,
+		);
+	} finally {
+		await runtime?.dispose();
+	}
+});
+
 test("a pre-ready child fault rejects launch readiness without escaping startup cleanup", {
 	timeout: TEST_TIMEOUT_MS,
 	skip: process.platform === "win32",

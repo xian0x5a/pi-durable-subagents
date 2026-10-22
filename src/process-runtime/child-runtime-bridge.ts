@@ -97,6 +97,9 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	};
 	pi.on("thinking_level_select", (_event, ctx) => endPresetThinking(ctx.model, ctx));
 	pi.on("model_select", (event, ctx) => endPresetThinking(event.previousModel, ctx));
+	pi.on("session_tree", (_event, ctx) =>
+		deactivateStartupFilteredToolsAfterTree(pi, bootstrap, ctx.sessionManager.getBranch())
+	);
 	let boundRuntime: AgentSessionRuntime | undefined;
 	const resolveAnswerTargetAgent = (toolCallId: string) => boundRuntime === undefined
 		? undefined
@@ -350,6 +353,8 @@ async function readExplicitSystemPrompt(
 	return { mode, filePath: await canonicalFilePath(source.path, runtime.cwd), body };
 }
 
+type StartupToolFilterBootstrap = Pick<ChildProcessBootstrap, "role" | "excludedTools" | "interaction">;
+
 /**
  * Applies the Spawn and Template exclusion filter to the child surface after
  * inherited startup handlers ran, and keeps the role coordination tools active so
@@ -358,7 +363,7 @@ async function readExplicitSystemPrompt(
  */
 function applyStartupToolFilter(
 	pi: ExtensionAPI,
-	bootstrap: Pick<ChildProcessBootstrap, "role" | "excludedTools" | "interaction">,
+	bootstrap: StartupToolFilterBootstrap,
 	retained: boolean,
 ): void {
 	const { roleTools, activeTools } = coordinationToolActivation(bootstrap.role, bootstrap.interaction);
@@ -368,6 +373,42 @@ function applyStartupToolFilter(
 		...pi.getActiveTools().filter((name) => !excludedNames.has(name)),
 		...activeTools,
 	])].filter((name) => !withheldTools.has(name)));
+}
+
+/** The tools the initial startup filter switches off: exclusions and withheld coordination tools. */
+function startupFilteredTools(
+	bootstrap: StartupToolFilterBootstrap,
+): ReadonlySet<string> {
+	const { roleTools, activeTools } = coordinationToolActivation(bootstrap.role, bootstrap.interaction);
+	const keptActive = new Set<string>(activeTools);
+	return new Set([
+		...bootstrap.excludedTools.filter((name) => !keptActive.has(name)),
+		...roleTools.filter((name) => !keptActive.has(name)),
+	]);
+}
+
+/**
+ * Pi 1.4.0 /tree restores the tool loadout recorded on the new branch and activates
+ * registered extension tools the branch never mentions, as if newly registered. The
+ * startup filter runs before any Run records a loadout, so its switched-off tools are
+ * never mentioned and come back. Undo exactly that: a mentioned tool already follows
+ * its recorded, possibly user-changed state, and a branch without recorded loadout
+ * keeps the current tools in Pi too.
+ */
+function deactivateStartupFilteredToolsAfterTree(
+	pi: ExtensionAPI,
+	bootstrap: StartupToolFilterBootstrap,
+	branch: ReturnType<hostPi.ExtensionContext["sessionManager"]["getBranch"]>,
+): void {
+	const systemMessages = branch.flatMap((entry) =>
+		entry.type === "message" && entry.message.role === "system" ? [entry.message] : []
+	);
+	if (systemMessages.length === 0) return;
+	const mentioned = new Set(systemMessages
+		.flatMap((message) => [...(message.toolsAdded ?? []), ...(message.toolsRemoved ?? [])])
+		.map((tool) => tool.name));
+	const filtered = startupFilteredTools(bootstrap);
+	pi.setActiveTools(pi.getActiveTools().filter((name) => !filtered.has(name) || mentioned.has(name)));
 }
 
 function assertExpectedSession(runtime: AgentSessionRuntime, bootstrap: ChildProcessBootstrap): void {

@@ -249,6 +249,18 @@ const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 		},
 	});
 
+	pi.registerCommand("runtime-tree", {
+		description: "Navigate the session tree back to the first assistant reply, as /tree does",
+		async handler(_args, ctx) {
+			const firstReply = ctx.sessionManager.getBranch().find((entry) =>
+				entry.type === "message" && entry.message.role === "assistant"
+			);
+			if (!firstReply) throw new Error("runtime-tree needs a completed assistant reply");
+			await ctx.navigateTree(firstReply.id, { summarize: false });
+			ctx.ui.setWidget("process-runtime-tree", ["PROCESS_RUNTIME_TREE_NAVIGATED"]);
+		},
+	});
+
 	pi.registerCommand("runtime-probe", {
 		description: "Show process runtime PTY input and dimensions",
 		async handler(args, ctx) {
