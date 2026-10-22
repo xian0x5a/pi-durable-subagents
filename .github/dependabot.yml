@@ -13,6 +13,11 @@ updates:
     # Only Pi is automated; other dependencies are bumped by hand.
     allow:
       - dependency-name: "@earendil-works/pi-*"
+    # Dependabot holds new releases for 3 days by default (since July 2026).
+    # The upgrade routine reviews every Pi bump, so take Pi releases at once.
+    cooldown:
+      exclude:
+        - "@earendil-works/pi-*"
     groups:
       pi:
         patterns:

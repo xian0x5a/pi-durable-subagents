@@ -2,7 +2,7 @@
 
 Pi releases every few days, so upgrades are automated:
 
-1. Dependabot (`.github/dependabot.yml`) checks npm daily at 14:00 Pacific (its most frequent schedule) and opens one PR bumping the four `@earendil-works/pi-*` devDependencies.
+1. Dependabot (`.github/dependabot.yml`) checks npm daily at 14:00 Pacific (its most frequent schedule), exempts Pi from its default 3-day release cooldown, and opens one PR bumping the four `@earendil-works/pi-*` devDependencies.
 2. The **Pi upgrade** Claude Code routine runs on that PR and follows the procedure below. Its GitHub trigger is `pull_request.opened`, filtered to author `dependabot[bot]` and a title containing `the pi group`. Its prompt:
 
    > Follow docs/pi-upgrade.md for the pull request that triggered this run. You may push to that pull request's head branch, label it, and merge it, as the procedure describes.
