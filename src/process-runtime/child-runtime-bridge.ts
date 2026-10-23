@@ -100,9 +100,11 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	pi.on("model_select", (event, ctx) => endPresetThinking(event.previousModel, ctx));
 	// The bridge is the first child extension, so this runs before other extensions'
 	// session_tree handlers; their later activation changes remain native Runtime behavior.
-	pi.on("session_tree", (_event, ctx) =>
-		deactivateStartupFilteredToolsAfterTree(pi, bootstrap, ctx.sessionManager.getBranch())
-	);
+	pi.on("session_tree", (_event, ctx) => {
+		const recordedActive = recordedActiveTools(ctx.sessionManager.getBranch());
+		// Pi keeps the current tools on a branch with no recorded loadout.
+		if (recordedActive !== undefined) applyStartupToolFilter(pi, bootstrap, recordedActive);
+	});
 	let boundRuntime: AgentSessionRuntime | undefined;
 	const resolveAnswerTargetAgent = (toolCallId: string) => boundRuntime === undefined
 		? undefined
@@ -248,7 +250,9 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			input: exactBinding.handleInput,
 			async completeStartup() {
 				try {
-					applyStartupToolFilter(pi, bootstrap, ctx.sessionManager.getBranch(), retained !== undefined);
+					// A fresh Runtime enforces the exclusions; reload keeps exclusions a Run recorded active.
+					const recordedActive = retained ? recordedActiveTools(ctx.sessionManager.getBranch()) : undefined;
+					applyStartupToolFilter(pi, bootstrap, recordedActive ?? new Set());
 					await exactBinding.publishRuntimeSnapshot();
 					// Only the first startup announces completion; reload republishes the snapshot above.
 					if (!retained) {
@@ -360,63 +364,42 @@ type StartupToolFilterBootstrap = Pick<ChildProcessBootstrap, "role" | "excluded
 type SessionBranch = ReturnType<hostPi.ExtensionContext["sessionManager"]["getBranch"]>;
 
 /**
- * Applies the Spawn and Template exclusion filter to the child surface after
- * inherited startup handlers ran, and keeps the role coordination tools active so
- * a filtered or rewired child can still answer. Absent names are ignored.
- * Pi 1.4.0 /reload re-activates every extension tool, so reload re-asserts the
- * filter too, except for excluded tools the branch recorded active: a native change
- * a Run recorded is the branch's own state.
+ * Applies the Spawn and Template exclusion filter to the child surface whenever
+ * Pi builds it: when startup completes, after inherited startup handlers ran, and
+ * after Pi 1.4.0 rebuilds it on /reload and /tree. Reload re-activates every
+ * extension tool that activates on registration, including recorded removals, and
+ * /tree activates registered extension tools the branch never mentions; the startup
+ * filter runs before any Run records a loadout, so its switched-off tools come back.
+ *
+ * The resulting surface is Pi's tools minus withheld coordination tools, minus
+ * excluded tools unless `recordedActive` has them, plus the role's active coordination
+ * tools so a filtered or rewired child can still answer. Withholding follows this
+ * Runtime's interaction mode: a loadout recorded under a terminal Runtime must not keep
+ * a human-only tool in a headless one. Exclusions are a user filter, so an excluded
+ * tool a Run recorded active is the branch's own state and stays. Absent names are
+ * ignored.
+ *
+ * Known limitation: Pi forgets its pending tools (recorded or previously active tools
+ * that register late, such as MCP tools of a server still connecting) whenever a
+ * loadout change deactivates a tool, so after a filtering /reload or /tree such a tool
+ * may stay off once it registers. Pi's public API cannot keep them pending.
  */
 function applyStartupToolFilter(
 	pi: ExtensionAPI,
 	bootstrap: StartupToolFilterBootstrap,
-	branch: SessionBranch,
-	retained: boolean,
-): void {
-	const { activeTools } = coordinationToolActivation(bootstrap.role, bootstrap.interaction);
-	const recordedActive = retained ? recordedActiveTools(branch) ?? new Set<string>() : new Set<string>();
-	pi.setActiveTools(withoutUnrecordedFilteredTools(
-		[...new Set([...pi.getActiveTools(), ...activeTools])],
-		bootstrap,
-		recordedActive,
-	));
-}
-
-/**
- * Pi 1.4.0 /tree restores the tool loadout recorded on the new branch and activates
- * registered extension tools the branch never mentions, as if newly registered. The
- * startup filter runs before any Run records a loadout, so its switched-off tools come
- * back. Undo exactly that: a recorded excluded tool already follows its recorded,
- * possibly user-changed state, and Pi keeps the current tools on a branch with no
- * recorded loadout.
- */
-function deactivateStartupFilteredToolsAfterTree(
-	pi: ExtensionAPI,
-	bootstrap: StartupToolFilterBootstrap,
-	branch: SessionBranch,
-): void {
-	const recordedActive = recordedActiveTools(branch);
-	if (recordedActive === undefined) return;
-	pi.setActiveTools(withoutUnrecordedFilteredTools(pi.getActiveTools(), bootstrap, recordedActive));
-}
-
-/**
- * Drops the startup-filtered tools from `names`. Withheld coordination tools always go:
- * withholding follows this Runtime's interaction mode, and a loadout recorded under a
- * terminal Runtime must not keep a human-only tool in a headless one. Excluded tools
- * are a user filter, so the ones the branch recorded active stay.
- */
-function withoutUnrecordedFilteredTools(
-	names: readonly string[],
-	bootstrap: StartupToolFilterBootstrap,
 	recordedActive: ReadonlySet<string>,
-): string[] {
+): void {
 	const { roleTools, activeTools } = coordinationToolActivation(bootstrap.role, bootstrap.interaction);
 	const keptActive = new Set<string>(activeTools);
 	const withheld = new Set<string>(roleTools.filter((name) => !keptActive.has(name)));
 	// Exclusions never switch off the role's active coordination tools.
 	const excluded = new Set(bootstrap.excludedTools.filter((name) => !keptActive.has(name)));
-	return names.filter((name) => !withheld.has(name) && (!excluded.has(name) || recordedActive.has(name)));
+	pi.setActiveTools([...new Set([
+		...pi.getActiveTools().filter((name) =>
+			!withheld.has(name) && (!excluded.has(name) || recordedActive.has(name))
+		),
+		...activeTools,
+	])]);
 }
 
 /** The active tools the branch's recorded loadout yields, as Pi restores it, or undefined when no Run recorded one. */

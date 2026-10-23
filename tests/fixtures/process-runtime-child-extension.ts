@@ -248,15 +248,23 @@ const processRuntimeChildFixture: ExtensionFactory = (pi) => {
 			ctx.ui.setWidget("process-runtime-activated", ["PROCESS_RUNTIME_TOOL_ACTIVATED"]);
 		},
 	});
+	pi.registerCommand("runtime-deactivate", {
+		description: "Deactivate a named tool after initial admission",
+		async handler(args, ctx) {
+			pi.setActiveTools(pi.getActiveTools().filter((name) => name !== args.trim()));
+			ctx.ui.setWidget("process-runtime-deactivated", ["PROCESS_RUNTIME_TOOL_DEACTIVATED"]);
+		},
+	});
 
 	pi.registerCommand("runtime-tree", {
-		description: "Navigate the session tree back to the first assistant reply, as /tree does",
-		async handler(_args, ctx) {
-			const firstReply = ctx.sessionManager.getBranch().find((entry) =>
+		description: "Navigate the session tree back to the Nth assistant reply (default first), as /tree does",
+		async handler(args, ctx) {
+			const replyNumber = Number(args.trim() || "1");
+			const reply = ctx.sessionManager.getBranch().filter((entry) =>
 				entry.type === "message" && entry.message.role === "assistant"
-			);
-			if (!firstReply) throw new Error("runtime-tree needs a completed assistant reply");
-			await ctx.navigateTree(firstReply.id, { summarize: false });
+			)[replyNumber - 1];
+			if (!reply) throw new Error(`runtime-tree needs assistant reply ${replyNumber}`);
+			await ctx.navigateTree(reply.id, { summarize: false });
 			ctx.ui.setWidget("process-runtime-tree", ["PROCESS_RUNTIME_TREE_NAVIGATED"]);
 		},
 	});
