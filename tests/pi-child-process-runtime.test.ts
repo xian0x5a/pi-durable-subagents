@@ -1298,6 +1298,176 @@ for (const scenario of STARTUP_TOOL_FILTER_SCENARIOS) {
 	});
 }
 
+// Pi 1.4.0 /tree navigation re-activates registered extension tools that the
+// branch's recorded loadout never mentions, and a startup exclusion is never
+// recorded as a removal (issue #256). Pi's /reload re-activates every extension
+// tool that is active on registration. A native re-enable that a Run recorded is
+// the branch's own state and survives; a withheld coordination tool follows the
+// Runtime's interaction mode, and the role's active coordination tools come back.
+const EXCLUDED_PROBE = { tool: "runtime_sequential_probe", interaction: "terminal", seedUnrecordedReply: false } as const;
+// Two Runs record the loadout on the branch and give /tree an earlier entry to return to.
+const RECORDED_RUNS_THEN_TREE = ["run", "run", "tree"] as const;
+for (const scenario of [
+	{
+		...EXCLUDED_PROBE,
+		name: "an excluded extension tool stays inactive across /tree navigation",
+		steps: RECORDED_RUNS_THEN_TREE,
+		expectedActive: false,
+	},
+	{
+		...EXCLUDED_PROBE,
+		name: "an excluded tool re-enabled and recorded by a Run stays active across /tree navigation",
+		steps: ["activate", ...RECORDED_RUNS_THEN_TREE],
+		expectedActive: true,
+	},
+	{
+		// Pi keeps the current tools when the target branch recorded no loadout.
+		...EXCLUDED_PROBE,
+		name: "an excluded tool re-enabled before any recorded loadout stays active across /tree navigation",
+		seedUnrecordedReply: true,
+		steps: ["activate", "tree"],
+		expectedActive: true,
+	},
+	{
+		...EXCLUDED_PROBE,
+		name: "an excluded extension tool stays inactive across /reload",
+		steps: ["reload"],
+		expectedActive: false,
+	},
+	{
+		...EXCLUDED_PROBE,
+		name: "an excluded tool re-enabled and recorded by a Run stays active across /reload",
+		steps: ["activate", "run", "reload"],
+		expectedActive: true,
+	},
+	{
+		name: "a withheld human-only tool re-enabled and recorded by a Run stays inactive across /reload",
+		tool: "ask_user",
+		interaction: "headless",
+		seedUnrecordedReply: false,
+		steps: ["activate", "run", "reload"],
+		expectedActive: false,
+	},
+	{
+		// Turned off after the first Run, so the second records the removal; /tree returns to its reply.
+		name: "a role coordination tool turned off and recorded by a Run is active again after /tree navigation",
+		tool: "agent_message",
+		interaction: "terminal",
+		seedUnrecordedReply: false,
+		steps: ["run", "deactivate", "run", "run", "tree-to-second-reply"],
+		expectedActive: true,
+	},
+] as const) test(`startup tool filter: ${scenario.name}`, {
+	timeout: TEST_TIMEOUT_MS,
+	skip: process.platform === "win32",
+}, async () => {
+	const root = await mkdtemp(join(tmpdir(), "pi-child-tool-filter-tree-test-"));
+	const cwd = join(root, "work");
+	const sessionDirectory = join(root, "sessions");
+	const expectedSessionId = "019a6b4d-1b22-7000-8000-000000000011";
+	await mkdir(cwd, { recursive: true });
+	await mkdir(sessionDirectory, { recursive: true });
+	const sessionPath = join(sessionDirectory, "child.jsonl");
+	await writeFile(sessionPath, `${JSON.stringify({
+		type: "session",
+		version: 3,
+		id: expectedSessionId,
+		timestamp: new Date().toISOString(),
+		cwd,
+	})}\n`, { mode: 0o600 });
+	if (scenario.seedUnrecordedReply) {
+		// A reply without a system message before it: a branch that recorded no loadout.
+		const seededSession = SessionManager.open(sessionPath);
+		seededSession.appendMessage({ role: "user", content: [{ type: "text", text: "Earlier" }], timestamp: Date.now() });
+		seededSession.appendMessage({
+			role: "assistant",
+			content: [{ type: "text", text: "Earlier reply" }],
+			api: "openai-responses",
+			provider: PROCESS_RUNTIME_TEST_PROVIDER,
+			model: PROCESS_RUNTIME_TEST_MODEL,
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		});
+	}
+	const observedTool = scenario.tool;
+	let runtime: PiChildProcessRuntime | undefined;
+	try {
+		runtime = await PiChildProcessRuntime.start({
+			workflowId: "process-tool-filter-tree-workflow",
+			agentId: "process-tool-filter-tree-agent",
+			role: "ordinary",
+			interaction: scenario.interaction,
+			expectedSessionId,
+			sessionPath,
+			configuration: {
+				cwd,
+				model: {
+					provider: PROCESS_RUNTIME_TEST_PROVIDER,
+					modelId: PROCESS_RUNTIME_TEST_MODEL,
+				},
+				thinking: "off",
+				excludeTools: [EXCLUDED_PROBE.tool],
+				excludeSkills: [],
+				skills: [],
+				extensions: [CHILD_EXTENSION],
+				loadContextFiles: true,
+			},
+			skillPaths: [],
+			projectTrusted: true,
+			ownerEnvironment: { ...process.env, PI_SKIP_VERSION_CHECK: "1" },
+			runtimeDirectory: root,
+			ownerRequestHandlers: ordinaryOwnerHandlers({
+				selectorSnapshot: processSelectorSnapshot(expectedSessionId),
+			}),
+		});
+		const startedRuntime = runtime;
+		let settledRuns = 0;
+		startedRuntime.onEvent((event: ControlEvent<ChildToOwnerControl>) => {
+			if (event.event === "agent.settled") settledRuns += 1;
+		});
+		for (const [index, step] of scenario.steps.entries()) {
+			if (step === "activate") {
+				startedRuntime.writeInput(`/runtime-activate ${observedTool}\r`);
+				await waitForFrame(startedRuntime, "PROCESS_RUNTIME_TOOL_ACTIVATED");
+			} else if (step === "deactivate") {
+				startedRuntime.writeInput(`/runtime-deactivate ${observedTool}\r`);
+				await waitForFrame(startedRuntime, "PROCESS_RUNTIME_TOOL_DEACTIVATED");
+			} else if (step === "run") {
+				const settledBefore = settledRuns;
+				await startedRuntime.channel.request("message.deliver", {
+					deliveryId: `tool-filter-run-${index}`,
+					proveCommit: true,
+					delivery: { kind: "user", content: `Complete step ${index}.` },
+				});
+				await waitUntil(() => settledRuns > settledBefore);
+			} else if (step === "tree" || step === "tree-to-second-reply") {
+				startedRuntime.writeInput(step === "tree" ? "/runtime-tree\r" : "/runtime-tree 2\r");
+				await waitForFrame(startedRuntime, "PROCESS_RUNTIME_TREE_NAVIGATED");
+			} else {
+				startedRuntime.writeInput("/reload\r");
+				await waitForFrame(startedRuntime, "Reloaded keybindings");
+			}
+		}
+
+		const { tools } = await startedRuntime.channel.request("runtime.snapshot", {});
+		assert.equal(
+			tools.includes(observedTool),
+			scenario.expectedActive,
+			`${observedTool} activation after ${scenario.steps.join(", ")}: ${JSON.stringify(tools)}`,
+		);
+	} finally {
+		await runtime?.dispose();
+	}
+});
+
 test("a pre-ready child fault rejects launch readiness without escaping startup cleanup", {
 	timeout: TEST_TIMEOUT_MS,
 	skip: process.platform === "win32",

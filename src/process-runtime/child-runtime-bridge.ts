@@ -1,3 +1,4 @@
+import { getCurrentTools } from "@earendil-works/pi-ai";
 import * as hostPi from "@earendil-works/pi-coding-agent";
 import type {
 	AgentSession,
@@ -97,6 +98,13 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 	};
 	pi.on("thinking_level_select", (_event, ctx) => endPresetThinking(ctx.model, ctx));
 	pi.on("model_select", (event, ctx) => endPresetThinking(event.previousModel, ctx));
+	// The bridge is the first child extension, so this runs before other extensions'
+	// session_tree handlers; their later activation changes remain native Runtime behavior.
+	pi.on("session_tree", (_event, ctx) => {
+		const recordedActive = recordedActiveTools(ctx.sessionManager.getBranch());
+		// Pi keeps the current tools on a branch with no recorded loadout.
+		if (recordedActive !== undefined) applyStartupToolFilter(pi, bootstrap, recordedActive);
+	});
 	let boundRuntime: AgentSessionRuntime | undefined;
 	const resolveAnswerTargetAgent = (toolCallId: string) => boundRuntime === undefined
 		? undefined
@@ -242,9 +250,11 @@ const childRuntimeBridge: ExtensionFactory = async (pi) => {
 			input: exactBinding.handleInput,
 			async completeStartup() {
 				try {
-					applyStartupToolFilter(pi, bootstrap, retained !== undefined);
+					// A fresh Runtime enforces the exclusions; reload keeps exclusions a Run recorded active.
+					const recordedActive = retained ? recordedActiveTools(ctx.sessionManager.getBranch()) : undefined;
+					applyStartupToolFilter(pi, bootstrap, recordedActive ?? new Set());
 					await exactBinding.publishRuntimeSnapshot();
-					// Reload reports current state but does not re-enforce the initial selection.
+					// Only the first startup announces completion; reload republishes the snapshot above.
 					if (!retained) {
 						await channel.sendEvent("runtime.startupComplete", await exactBinding.runtimeSnapshot());
 					}
@@ -350,24 +360,52 @@ async function readExplicitSystemPrompt(
 	return { mode, filePath: await canonicalFilePath(source.path, runtime.cwd), body };
 }
 
+type SessionBranch = ReturnType<hostPi.ExtensionContext["sessionManager"]["getBranch"]>;
+
 /**
- * Applies the Spawn and Template exclusion filter to the child surface after
- * inherited startup handlers ran, and keeps the role coordination tools active so
- * a filtered or rewired child can still answer. Reload preserves native changes
- * and only re-asserts participation. Absent names are ignored.
+ * Applies the Spawn and Template exclusion filter to the child surface whenever
+ * Pi builds it: when startup completes, after inherited startup handlers ran, and
+ * after Pi 1.4.0 rebuilds it on /reload and /tree. Reload re-activates every
+ * extension tool that activates on registration, including recorded removals, and
+ * /tree activates registered extension tools the branch never mentions; the startup
+ * filter runs before any Run records a loadout, so its switched-off tools come back.
+ *
+ * The resulting surface is Pi's tools minus withheld coordination tools, minus
+ * excluded tools unless `recordedActive` has them, plus the role's active coordination
+ * tools so a filtered or rewired child can still answer. Withholding follows this
+ * Runtime's interaction mode: a loadout recorded under a terminal Runtime must not keep
+ * a human-only tool in a headless one. Exclusions are a user filter, so an excluded
+ * tool a Run recorded active is the branch's own state and stays. Absent names are
+ * ignored.
+ *
+ * Known limitation: Pi forgets its pending tools (recorded or previously active tools
+ * that register late, such as MCP tools of a server still connecting) whenever a
+ * loadout change deactivates a tool, so after a filtering /reload or /tree such a tool
+ * may stay off once it registers. Pi's public API cannot keep them pending.
  */
 function applyStartupToolFilter(
 	pi: ExtensionAPI,
 	bootstrap: Pick<ChildProcessBootstrap, "role" | "excludedTools" | "interaction">,
-	retained: boolean,
+	recordedActive: ReadonlySet<string>,
 ): void {
 	const { roleTools, activeTools } = coordinationToolActivation(bootstrap.role, bootstrap.interaction);
-	const withheldTools = new Set<string>(roleTools.filter((name) => !activeTools.includes(name)));
-	const excludedNames = new Set(retained ? [] : bootstrap.excludedTools);
+	const withheld = new Set<string>(roleTools.filter((name) => !activeTools.includes(name)));
+	const excluded = new Set(bootstrap.excludedTools);
 	pi.setActiveTools([...new Set([
-		...pi.getActiveTools().filter((name) => !excludedNames.has(name)),
+		...pi.getActiveTools().filter((name) =>
+			!withheld.has(name) && (!excluded.has(name) || recordedActive.has(name))
+		),
 		...activeTools,
-	])].filter((name) => !withheldTools.has(name)));
+	])]);
+}
+
+/** The active tools the branch's recorded loadout yields, as Pi restores it, or undefined when no Run recorded one. */
+function recordedActiveTools(branch: SessionBranch): ReadonlySet<string> | undefined {
+	const systemMessages = branch.flatMap((entry) =>
+		entry.type === "message" && entry.message.role === "system" ? [entry.message] : []
+	);
+	if (systemMessages.length === 0) return undefined;
+	return new Set(getCurrentTools(systemMessages).map((tool) => tool.name));
 }
 
 function assertExpectedSession(runtime: AgentSessionRuntime, bootstrap: ChildProcessBootstrap): void {
