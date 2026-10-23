@@ -360,7 +360,6 @@ async function readExplicitSystemPrompt(
 	return { mode, filePath: await canonicalFilePath(source.path, runtime.cwd), body };
 }
 
-type StartupToolFilterBootstrap = Pick<ChildProcessBootstrap, "role" | "excludedTools" | "interaction">;
 type SessionBranch = ReturnType<hostPi.ExtensionContext["sessionManager"]["getBranch"]>;
 
 /**
@@ -386,14 +385,12 @@ type SessionBranch = ReturnType<hostPi.ExtensionContext["sessionManager"]["getBr
  */
 function applyStartupToolFilter(
 	pi: ExtensionAPI,
-	bootstrap: StartupToolFilterBootstrap,
+	bootstrap: Pick<ChildProcessBootstrap, "role" | "excludedTools" | "interaction">,
 	recordedActive: ReadonlySet<string>,
 ): void {
 	const { roleTools, activeTools } = coordinationToolActivation(bootstrap.role, bootstrap.interaction);
-	const keptActive = new Set<string>(activeTools);
-	const withheld = new Set<string>(roleTools.filter((name) => !keptActive.has(name)));
-	// Exclusions never switch off the role's active coordination tools.
-	const excluded = new Set(bootstrap.excludedTools.filter((name) => !keptActive.has(name)));
+	const withheld = new Set<string>(roleTools.filter((name) => !activeTools.includes(name)));
+	const excluded = new Set(bootstrap.excludedTools);
 	pi.setActiveTools([...new Set([
 		...pi.getActiveTools().filter((name) =>
 			!withheld.has(name) && (!excluded.has(name) || recordedActive.has(name))

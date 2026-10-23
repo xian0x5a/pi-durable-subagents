@@ -1335,6 +1335,12 @@ for (const scenario of [
 		expectedActive: false,
 	},
 	{
+		...EXCLUDED_PROBE,
+		name: "an excluded tool re-enabled and recorded by a Run stays active across /reload",
+		steps: ["activate", "run", "reload"],
+		expectedActive: true,
+	},
+	{
 		name: "a withheld human-only tool re-enabled and recorded by a Run stays inactive across /reload",
 		tool: "ask_user",
 		interaction: "headless",
