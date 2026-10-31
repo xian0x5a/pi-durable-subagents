@@ -64,16 +64,15 @@ warning presentation.
 
 ## Shared context-only marking
 
-Use compact ASCII markers with distinct labels backed by structured reasons:
+Use a compact ASCII marker with a distinct label backed by a structured reason:
 
 | Mark | Label | Meaning |
 | --- | --- | --- |
 | `!` | Corrupted record | The record failed declared validation and cannot drive coordination replay. This does not mean the recorded action never happened. |
-| `^` | Inherited | The material belongs to another Agent's inherited scope; it may be entirely valid there. |
 
 Include one legend in the existing coordination guidance:
 
-> History marks: `!` corrupted record, `^` inherited. Both are informational; neither cancels an existing obligation.
+> History mark: `!` corrupted record. It is informational and does not cancel an existing obligation.
 
 A corrupted record is unusable for coordination replay, not proof that the action
 never happened or permission to repeat it. The internal `invalid` reason still
@@ -101,15 +100,14 @@ presentation contract. It must establish the affected retry, cancellation, Wait,
 and delivery outcomes without reintroducing uncertainty reconstruction.
 
 **[#134](https://github.com/xian0x5a/pi-durable-subagents/issues/134) owns fork-side projection.**
-It applies the shared representation to inherited coordination, including copied
-Request Deliveries. Markers and shared guidance provide model orientation; there
-is no separate Owner identity block. Preserve the durable Identity cutoff after
-copied history. Classification follows all-branch scope, not the selected leaf;
-inherited valid calls must not be called corrupted records merely because they were copied.
+Inherited coordination, including copied Request Deliveries, reaches the model
+unmarked so a fork keeps its parent's prefix. One transient boundary and shared
+guidance provide model orientation; there is no separate Owner identity block.
+Preserve the durable Identity cutoff after copied history. Classification follows
+all-branch scope, not the selected leaf; inherited valid calls must not be called
+corrupted records merely because they were copied.
 
-Fork projection changes prompt-prefix reuse: inherited marking favors clarity
-over the former prefix-preservation advantage. Child
-Conversation Fork is removed; Owner fork/clone remain supported. Source
+Child Conversation Fork is removed; Owner fork/clone remain supported. Source
 transcripts and obligations stay unchanged. See [Owner fork and clone](owner-workflow.md#owner-fork-and-clone)
 for the projection and summary behavior; these remain separate from invalid-record replay.
 
@@ -176,8 +174,8 @@ exclusion is refreshed at startup, applies to attention/continuation only, and
 does not suppress newly delivered Requests. No new durable focus snapshot is
 written, and no snapshot is used as a substitute for accepted source evidence.
 
-The shared presentation interface accepts a structured `invalid` or `inherited`
-reason; #131 produces only `invalid`. For each affected native call/result group,
+The shared presentation interface accepts a structured `invalid` reason.
+For each affected native call/result group,
 project one informational group preserving source, call arguments, result content,
 and diagnostics. Remove both native sides of that group from model input, retain
 unrelated assistant content and valid sibling calls/results, and leave the source
@@ -188,8 +186,8 @@ base64 text. Emit each informational group after its complete native tool batch
 so valid sibling results remain adjacent to their native call message. Resolve
 marked results against physical source ownership, not merely a tool ID that could
 also occur in copied history. Apply projection at the existing non-triggering
-model-context hook; do not add reminder turns. #134 owns inherited classification,
-fork context ordering, and cache-prefix changes.
+model-context hook; do not add reminder turns. Inherited history and its cache
+prefix are covered in `docs/owner-workflow.md`.
 
 If removing rejected calls leaves only signed native thinking, preserve that
 material inside the informational group instead of emitting a provider-invalid

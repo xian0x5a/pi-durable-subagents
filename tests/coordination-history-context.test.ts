@@ -42,7 +42,7 @@ test("rejected call/result group is informational once, retaining valid sibling 
 	assert.match(text, /Request title missing/);
 	assert.ok(text.includes(session.getSessionId()) && text.includes(entryId));
 	assert.equal(text.split("! ").length - 1, 1);
-	assert.doesNotMatch(text, /History marks|neither cancels/);
+	assert.doesNotMatch(text, /History mark|does not cancel/);
 });
 
 test("a rejected result surviving compaction is information, not a dangling native result or lost content", () => {
@@ -129,7 +129,7 @@ test("a selected branch keeps an exact duplicate current call native", () => {
 	const currentResult = { ...result("exact-duplicate", "agent_message", "Same result"), timestamp: 2 };
 	session.appendMessage(currentResult);
 	const transcript = transcriptFromSessionManager(session).inspect();
-	const projected = projectCoordinationHistory({ messages: structuredClone(transcript.context.messages), transcript, marks: [{ reason: "inherited",
+	const projected = projectCoordinationHistory({ messages: structuredClone(transcript.context.messages), transcript, marks: [{ reason: "invalid",
 		record: { agentId: "source-owner", entryId: inheritedEntryId, kind: "tool-call", toolCallId: "exact-duplicate" }, diagnostic: "Historical source scope",
 	}] });
 	assert.equal(projected.some(message => message.role === "assistant" && message.content.some(part => part.type === "toolCall" && part.id === "exact-duplicate")), true);
@@ -147,7 +147,7 @@ test("a compacted context keeps an exact duplicate current call and result nativ
 	session.appendMessage(currentResult);
 	session.appendCompaction("Current summary", currentEntryId, 100);
 	const transcript = transcriptFromSessionManager(session).inspect();
-	const projected = projectCoordinationHistory({ messages: structuredClone(transcript.context.messages), transcript, marks: [{ reason: "inherited",
+	const projected = projectCoordinationHistory({ messages: structuredClone(transcript.context.messages), transcript, marks: [{ reason: "invalid",
 		record: { agentId: "source-owner", entryId: inheritedEntryId, kind: "tool-call", toolCallId: "exact-compacted" }, diagnostic: "Historical source scope",
 	}] });
 	assert.equal(projected.some(message => message.role === "assistant" && message.content.some(part => part.type === "toolCall" && part.id === "exact-compacted")), true);
@@ -164,7 +164,7 @@ test("projecting an already marked context keeps an exact duplicate current call
 	const currentResult = { ...result("projected-duplicate", "agent_message", "Same result"), timestamp: 2 };
 	session.appendMessage(currentResult);
 	const transcript = transcriptFromSessionManager(session).inspect();
-	const inheritedMark = { reason: "inherited" as const,
+	const inheritedMark = { reason: "invalid" as const,
 		record: { agentId: "source-owner", entryId: inheritedEntryId, kind: "tool-call" as const, toolCallId: "projected-duplicate" }, diagnostic: "Historical source scope" };
 	const first = projectCoordinationHistory({ messages: transcript.context.messages, transcript, marks: [inheritedMark] });
 	const repeated = projectCoordinationHistory({ messages: first, transcript, marks: [inheritedMark] });
@@ -177,8 +177,7 @@ test("projecting an already marked context keeps an exact duplicate current call
 		record: { agentId: session.getSessionId(), entryId: currentEntryId, kind: "tool-call" as const, toolCallId: "projected-duplicate" }, diagnostic: "Missing title" };
 	const combined = projectCoordinationHistory({ messages: structuredClone(first), transcript, marks: [inheritedMark, invalidMark] });
 	const combinedText = JSON.stringify(combined);
-	assert.equal(combinedText.split("^ ").length - 1, 1);
-	assert.equal(combinedText.split("! ").length - 1, 1);
+	assert.equal(combinedText.split("! ").length - 1, 2);
 	assert.equal(combined.filter(message => message.role === "assistant" && message.content.some(part => part.type === "toolCall" && part.id === "projected-duplicate")).length, 0);
 });
 
@@ -219,20 +218,6 @@ test("removing rejected calls preserves signed thinking as information rather th
 	assert.equal(projected.some(message => message.role === "assistant" && message.content.every(part => part.type === "thinking")), false);
 	assert.match(JSON.stringify(projected), /Historical reasoning/);
 	assert.match(JSON.stringify(projected), /native-signature/);
-});
-
-test("shared marking represents inherited material distinctly without classifying it as invalid", () => {
-	const session = SessionManager.inMemory(process.cwd());
-	const assistant = fauxAssistantMessage(fauxToolCall("agent_message", { operation: "send", content: "Parent work", targetAgent: "peer" }, { id: "parent-call" }));
-	const entryId = session.appendMessage(assistant);
-	const projected = projectCoordinationHistory({ messages: [assistant],
-		transcript: transcriptFromSessionManager(session).inspect(), marks: [{ reason: "inherited",
-			record: { agentId: "parent-agent", entryId, kind: "tool-call", toolCallId: "parent-call" },
-			diagnostic: "Parent scope",
-		}] });
-	assert.match(JSON.stringify(projected), /\^ /);
-	assert.doesNotMatch(JSON.stringify(projected), /! |invalid/);
-	assert.match(JSON.stringify(projected), /parent-agent/);
 });
 
 function result(toolCallId: string, toolName: string, text: string): AgentMessage & { role: "toolResult" } {

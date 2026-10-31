@@ -44,6 +44,7 @@ const PROCESS_TEST_FILES = new Set([
 	"moderator-startup-progress.test.ts",
 	"owner-bootstrap.test.ts",
 	"owner-fork.test.ts",
+	"owner-fork-boundary-process.test.ts",
 	"owner-settlement-parking.test.ts",
 	"parked-owner-deferred-request.test.ts",
 	"owner-workflow.test.ts",

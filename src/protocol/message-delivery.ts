@@ -1,11 +1,10 @@
 import { CoordinationRecordValidationError } from "./record-validation.ts";
 import { readCoordinationRecord } from "./replay-rejection.ts";
 import { MODERATOR_REPORT_CUSTOM_TYPE, MODERATOR_REPORT_READ_STATE_CUSTOM_TYPE, MODERATOR_REPORT_FINDING_CUSTOM_TYPE } from "./moderator-report.ts";
-import { AGENT_IDENTITY_CUSTOM_TYPE, OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE, REQUEST_ATTENTION_CUSTOM_TYPE, OBLIGATION_FOCUS_CUSTOM_TYPE } from "./custom-entry-types.ts";
+import { AGENT_IDENTITY_CUSTOM_TYPE, OPERATIONAL_DIAGNOSTIC_CUSTOM_TYPE, OWNER_FORK_PROVENANCE_CUSTOM_TYPE, REQUEST_ATTENTION_CUSTOM_TYPE, OBLIGATION_FOCUS_CUSTOM_TYPE } from "./custom-entry-types.ts";
 import { indexedState, coordinationEntries } from "../transcript/retained-transcript.ts";
 
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
-import { OWNER_FORK_PROVENANCE_CUSTOM_TYPE } from "./fork-provenance.ts";
 import {
 	CONVERSATION_FORK_CUSTOM_TYPE,
 	MODERATOR_ROUTINE_START_CUSTOM_TYPE,

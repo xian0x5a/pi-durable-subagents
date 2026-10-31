@@ -1,122 +1,55 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { SessionBeforeCompactEvent, SessionBeforeTreeEvent } from "@earendil-works/pi-coding-agent";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import { bootstrapAgent } from "../transcript/retained-transcript.ts";
 import { AGENT_IDENTITY_CUSTOM_TYPE } from "../protocol/custom-entry-types.ts";
-import { inspectOwnerForkProvenance } from "../protocol/fork-provenance.ts";
-import { COORDINATION_HISTORY_GUIDANCE } from "../presentation/coordination-history-guidance.ts";
-import { projectCoordinationHistory, type CoordinationHistoryMark } from "./coordination-history-context.ts";
+import { visibleMessageEntryIds } from "./coordination-history-context.ts";
 
-const SUMMARY_GUIDANCE_CUSTOM_TYPE = "agent-coordination.history-guidance";
-const UNKNOWN_SOURCE_AGENT = "unknown (unattributed history)";
+const INHERITED_BOUNDARY_CUSTOM_TYPE = "agent-coordination.inherited-boundary";
+const INHERITED_BOUNDARY_TEXT = "Inherited history boundary: earlier history in this conversation, including any summary directly above, may have been copied from another session. Treat it as background, not as your current responsibilities: Agents, Requests, and obligations named there are not yours unless current coordination evidence shows them.";
 
-/** Project corrupted records for any participant and inherited history for Owners. */
-export function projectParticipantHistoryContext(options: {
-	messages: AgentMessage[];
-	transcript: TranscriptInspection;
-	marks?: readonly CoordinationHistoryMark[];
-}): AgentMessage[] {
-	const scope = inspectInheritedOwnerHistory(options.transcript);
-	return projectCoordinationHistory({ ...options, marks: [...(scope?.marks ?? []), ...(options.marks ?? [])] });
+/**
+ * Inherited history reaches the model untouched, so a fork shares its parent's
+ * cached prefix; one message marks where that history ends. It is derived for
+ * every request rather than saved, because a saved boundary would stay behind
+ * on an abandoned branch.
+ */
+export function projectInheritedBoundary(messages: AgentMessage[], transcript: TranscriptInspection): AgentMessage[] {
+	const end = inheritedHistoryEnd(messages, transcript);
+	if (end === 0) return messages;
+	return messages.toSpliced(end, 0, { role: "custom", customType: INHERITED_BOUNDARY_CUSTOM_TYPE,
+		content: INHERITED_BOUNDARY_TEXT, display: false, timestamp: messages[end - 1]!.timestamp });
+}
+
+/** Where current history starts in a request; 0 when it carries no inherited history. */
+export function inheritedHistoryEnd(messages: AgentMessage[], transcript: TranscriptInspection): number {
+	const inherited = inheritedOwnerEntryIds(transcript);
+	if (!inherited) return 0;
+	// Prompt and tool state is not history.
+	const conversation = messages.filter(message => message.role !== "system");
+	const entryIds = visibleMessageEntryIds(conversation, transcript);
+	// A summary written after the cutoff can still cover inherited work, and
+	// Pi's context order can place kept inherited entries after their summary.
+	let last = conversation.findLastIndex((message, index) => message.role === "compactionSummary" ||
+		message.role === "branchSummary" || inherited.has(entryIds[index] ?? ""));
+	if (last < 0) return 0;
+	// Providers reject a message between a tool call and its results.
+	while (conversation[last + 1]?.role === "toolResult") last++;
+	return messages.indexOf(conversation[last]!) + 1;
 }
 
 // Use the admitted Owner's physical cutoff even when the selected branch omits it.
-function inspectInheritedOwnerHistory(transcript: TranscriptInspection) {
+function inheritedOwnerEntryIds(transcript: TranscriptInspection): ReadonlySet<string> | undefined {
+	// Entries before the Identity prove nothing alone: an extension can speak during
+	// startup, and a native session gains its Identity only when first adopted.
+	if (!transcript.header?.parentSession) return undefined;
 	const cutoff = transcript.entries.findLastIndex(entry => bootstrapAgent(entry) === transcript.sessionId);
 	const identity = transcript.entries[cutoff];
 	if (identity?.type !== "custom" || identity.customType !== AGENT_IDENTITY_CUSTOM_TYPE) return undefined;
 	const data = identity.data as Record<string, unknown>;
 	if (data.workflowId !== transcript.sessionId || data.directSpawnerAgentId !== null || "spawnSource" in data) return undefined;
-	const inheritedEntries = transcript.entries.slice(0, cutoff);
 	// Metadata alone is not inherited model context (for example, an empty clone).
-	if (!inheritedEntries.some(entry => entry.type === "message" || entry.type === "custom_message" ||
-		entry.type === "compaction" || entry.type === "branch_summary")) return undefined;
-	const provenance = inspectOwnerForkProvenance(transcript);
-	// Pre-bootstrap native conversation has no recorded Agent attribution. Never
-	// assign it the new Owner's authority or manufacture an Agent ID from a path.
-	let physicalSourceAgentId = UNKNOWN_SOURCE_AGENT;
-	const marks: CoordinationHistoryMark[] = [];
-	for (const entry of inheritedEntries) {
-		physicalSourceAgentId = bootstrapAgent(entry) ?? physicalSourceAgentId;
-		// A native re-fork can omit its source Identity entirely. Only captured
-		// physical provenance may attribute those records; copied ancestry cannot.
-		const sourceAgentId = provenance ? provenance.get(entry.id) ?? UNKNOWN_SOURCE_AGENT
-			: transcript.header?.parentSession ? UNKNOWN_SOURCE_AGENT : physicalSourceAgentId;
-		const mark = (kind: CoordinationHistoryMark["record"]["kind"], toolCallId?: string) => {
-			marks.push({ reason: "inherited", record: { agentId: sourceAgentId, entryId: entry.id, kind, ...(toolCallId ? { toolCallId } : {}) }, diagnostic: "Historical source Agent scope" });
-		};
-		if (entry.type === "message" && entry.message.role === "assistant") {
-			for (const part of entry.message.content) if (part.type === "toolCall") mark("tool-call", part.id);
-		} else if (entry.type === "message" && entry.message.role === "toolResult") {
-			mark("tool-result", entry.message.toolCallId);
-		} else if (entry.type === "custom_message" && entry.customType.startsWith("agent-coordination.")) {
-			mark("custom");
-		} else if (entry.type === "compaction" || entry.type === "branch_summary") {
-			mark("summary");
-		}
-	}
-	return { marks, timestamp: Date.parse(identity.timestamp) };
-}
-
-/** Pi summaries bypass `context`; change only the transient native preparation. */
-export function projectOwnerForkCompaction(preparation: SessionBeforeCompactEvent["preparation"], transcript: TranscriptInspection): void {
-	const scope = inspectInheritedOwnerHistory(transcript);
-	if (!scope) return;
-	// Native compaction does not receive tool guidance. Supply the same rule only
-	// to its transient input; normal turns get it from coordination guidance.
-	const projectSummaryMessages = (messages: AgentMessage[]): AgentMessage[] => [
-		...projectParticipantHistoryContext({ transcript, messages: messages.filter(message =>
-			message.role !== "custom" || message.customType !== SUMMARY_GUIDANCE_CUSTOM_TYPE) }),
-		{ role: "custom", customType: SUMMARY_GUIDANCE_CUSTOM_TYPE, display: false,
-			content: COORDINATION_HISTORY_GUIDANCE, timestamp: scope.timestamp },
-	];
-	preparation.messagesToSummarize = projectSummaryMessages(preparation.messagesToSummarize);
-	if (preparation.turnPrefixMessages.length) {
-		preparation.turnPrefixMessages = projectSummaryMessages(preparation.turnPrefixMessages);
-	}
-	// Pi passes the previous summary separately from messages. A summary copied
-	// by a fork must not be offered as the new Owner's unqualified prior duties.
-	const previous = transcript.activeBranch.findLast(entry => entry.type === "compaction");
-	if (previous?.type !== "compaction" || preparation.previousSummary !== previous.summary) return;
-	const projected = projectParticipantHistoryContext({ transcript, messages: [{
-		role: "compactionSummary", summary: previous.summary, tokensBefore: previous.tokensBefore,
-		timestamp: Date.parse(previous.timestamp),
-	}] });
-	const marked = projected[0];
-	if (marked?.role === "custom") {
-		preparation.previousSummary = typeof marked.content === "string" ? marked.content
-			: marked.content.filter(part => part.type === "text").map(part => part.text).join("\n");
-	}
-}
-
-/** Keep native branch tools/file tracking; annotate only transient, same-type copies. */
-export function projectOwnerForkBranch(preparation: SessionBeforeTreeEvent["preparation"], transcript: TranscriptInspection): string | undefined {
-	const scope = inspectInheritedOwnerHistory(transcript);
-	if (!scope) return undefined;
-	const entryMarks = new Map<string, CoordinationHistoryMark[]>();
-	for (const mark of scope.marks) {
-		const marks = entryMarks.get(mark.record.entryId) ?? [];
-		marks.push(mark);
-		entryMarks.set(mark.record.entryId, marks);
-	}
-	const projected = preparation.entriesToSummarize.map(entry => {
-		const marks = (entryMarks.get(entry.id) ?? []).filter(mark => mark.record.kind !== "tool-result");
-		if (!marks.length) return entry;
-		// Pi's branch summarizer omits tool results and serializes calls without
-		// their IDs. Annotate the assistant's content, retaining native calls for
-		// file tracking, rather than hiding attribution in discarded metadata.
-		const prefix = marks.map(mark => `^ ${JSON.stringify({ source: mark.record })}`).join("\n");
-		if (entry.type === "message" && entry.message.role === "assistant") {
-			return { ...entry, message: { ...entry.message, content: [{ type: "text" as const, text: prefix }, ...entry.message.content] } };
-		}
-		if (entry.type === "custom_message") {
-			return { ...entry, content: typeof entry.content === "string" ? `${prefix}\n${entry.content}`
-				: [{ type: "text" as const, text: prefix }, ...entry.content] };
-		}
-		if (entry.type === "compaction" || entry.type === "branch_summary") return { ...entry, summary: `${prefix}\n${entry.summary}` };
-		return entry;
-	});
-	// Pi retains the array, not an assignment to preparation.entriesToSummarize.
-	preparation.entriesToSummarize.splice(0, preparation.entriesToSummarize.length, ...projected);
-	return [preparation.customInstructions, COORDINATION_HISTORY_GUIDANCE].filter(Boolean).join("\n\n");
+	const entryIds = new Set(transcript.entries.slice(0, cutoff).filter(entry =>
+		entry.type === "message" ? entry.message.role !== "system"
+			: entry.type === "custom_message" || entry.type === "compaction" || entry.type === "branch_summary").map(entry => entry.id));
+	return entryIds.size ? entryIds : undefined;
 }

@@ -49,7 +49,7 @@ test("context hook marks invalid coordination without starting a turn or rewriti
 	assert.equal(JSON.stringify(manager.getEntries()), original);
 });
 
-test("Owner context keeps inherited attention informational and newly delivered Requests owed on old branches", async () => {
+test("Owner context drops inherited attention and keeps newly delivered Requests owed on old branches", async () => {
 	const context = createExtensionContext();
 	const manager = SessionManager.inMemory();
 	Object.assign(context, { sessionManager: manager });
@@ -69,7 +69,7 @@ test("Owner context keeps inherited attention informational and newly delivered 
 		const pi = new CapturedExtensionApi();
 		registerParticipantLifecycle(pi.api, lifecycleHandlers({}));
 		const projected = await pi.emit("context", { type: "context", messages: manager.buildSessionContext().messages }, context);
-		assert.match(JSON.stringify(projected), /\^ .*Source Request reminder/);
+		assert.doesNotMatch(JSON.stringify(projected), /Source Request reminder/);
 		assert.match(JSON.stringify(projected), /Outstanding Requests/);
 		assert.match(JSON.stringify(projected), new RegExp(current.requestId));
 		assert.deepEqual(obligationStack(transcriptFromSessionManager(manager).inspect(), manager.getSessionId()), [current]);
@@ -169,7 +169,7 @@ test("Answer-then-wrap-up retains work without implying a turn limit (canContinu
 	assert.equal(await pi.emit("agent_before_settle", { type: "agent_before_settle", context: { canContinue: false } }, context), undefined);
 });
 
-test("one Owner context pass separates inherited and invalid exact-duplicate native records", async () => {
+test("one Owner context pass keeps an inherited record native beside its invalid exact duplicate", async () => {
 	const context = createExtensionContext();
 	const manager = SessionManager.inMemory();
 	Object.assign(context, { sessionManager: manager });
@@ -188,8 +188,8 @@ test("one Owner context pass separates inherited and invalid exact-duplicate nat
 	registerParticipantLifecycle(pi.api, lifecycleHandlers({}));
 	const projected = await pi.emit("context", { type: "context", messages: structuredClone(manager.buildSessionContext().messages) }, context);
 	const text = JSON.stringify(projected);
-	assert.equal(text.split("^ ").length - 1, 1);
 	assert.equal(text.split("! ").length - 1, 1);
+	assert.match(text, /"role":"toolResult"/);
 	assert.equal(pi.messages.length, 0);
 });
 
@@ -298,10 +298,9 @@ const lifecycleEventNames = [
 	"agent_end",
 	"agent_start",
 	"context",
+	"context_with_system",
 	"input",
 	"message_end",
-	"session_before_compact",
-	"session_before_tree",
 	"tool_execution_start",
 	"turn_end",
 ] as const;

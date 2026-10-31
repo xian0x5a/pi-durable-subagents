@@ -1,4 +1,6 @@
 export const AGENT_IDENTITY_CUSTOM_TYPE = "agent-coordination.identity";
+// Retained only so entries in existing sessions stay inert during replay; nothing writes it.
+export const OWNER_FORK_PROVENANCE_CUSTOM_TYPE = "agent-coordination.fork-provenance";
 // Retained only to classify historical handoffs as inert context during replay, never to spawn children.
 export const CONVERSATION_FORK_CUSTOM_TYPE =
 	"agent-coordination.conversation-fork";

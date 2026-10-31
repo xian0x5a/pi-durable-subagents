@@ -4,7 +4,8 @@ import { obligationStack, type ObligationFrame } from "../protocol/obligation-fo
 import { summarizeRequestObligations } from "../protocol/request-inspection.ts";
 import { transcriptFromSessionManager } from "./session-manager-transcript.ts";
 import { inspectCoordinationRejections } from "../protocol/replay-rejection.ts";
-import { projectOwnerForkBranch, projectOwnerForkCompaction, projectParticipantHistoryContext } from "./owner-fork-context.ts";
+import { projectCoordinationHistory } from "./coordination-history-context.ts";
+import { inheritedHistoryEnd, projectInheritedBoundary } from "./owner-fork-context.ts";
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import type {
 	ExtensionAPI,
@@ -103,7 +104,7 @@ export function registerParticipantLifecycle(
 		const rejections = inspectCoordinationRejections(transcript, agentId);
 		const frames = currentFrames(transcript, agentId);
 		// Replace earlier continuation snapshots so resolved Requests are not re-presented.
-		const messages = projectParticipantHistoryContext({
+		const messages = projectCoordinationHistory({
 			messages: event.messages,
 			transcript,
 			marks: rejections.map(rejection => ({ reason: rejection.reason,
@@ -118,7 +119,10 @@ export function registerParticipantLifecycle(
 			...requestPresentation(frames),
 			timestamp: Date.now(),
 		};
-		const deliveryIndex = messages.findLastIndex(message =>
+		// An inherited Delivery is background, so it must not pull current
+		// obligations above the inherited boundary.
+		const currentStart = inheritedHistoryEnd(messages, transcript);
+		const deliveryIndex = messages.findLastIndex((message, index) => index >= currentStart &&
 			message.role === "custom" && message.customType === MESSAGE_DELIVERY_CUSTOM_TYPE);
 		return {
 			messages: deliveryIndex < 0
@@ -130,14 +134,11 @@ export function registerParticipantLifecycle(
 				],
 		};
 	});
-	pi.on("session_before_compact", (event, ctx) => {
-		projectOwnerForkCompaction(event.preparation, transcriptFromSessionManager(ctx.sessionManager).inspect());
-	});
-	pi.on("session_before_tree", (event, ctx) => {
-		if (!event.preparation.userWantsSummary) return;
-		const customInstructions = projectOwnerForkBranch(event.preparation, transcriptFromSessionManager(ctx.sessionManager).inspect());
-		return customInstructions === undefined ? undefined : { customInstructions };
-	});
+	// Pi rebuilds the system messages after a changed `context` result, which would
+	// merge a mid-conversation tool update and lose the prefix shared with the parent.
+	pi.on("context_with_system", (event, ctx) => ({
+		messages: projectInheritedBoundary(event.messages, transcriptFromSessionManager(ctx.sessionManager).inspect()),
+	}));
 	if (options.registerInput !== false) {
 		registerParticipantInputLifecycle(pi, handlers, {
 			deferPrimaryInputQueued: options.deferPrimaryInputQueued,

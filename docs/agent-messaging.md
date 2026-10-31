@@ -183,8 +183,7 @@ selection of a missing authored Request fail locally with `unknown_identity`;
 an unselected Wait considers only valid authored outstanding Requests.
 
 Historical record-shape rejections use one `!` marker per informational call/result
-group. The shared `^` marker means inherited, not invalid. Neither marker cancels
-an independently valid obligation. See the [replay rejection contract](coordination-replay-rejection-design.md).
+group. The marker does not cancel an independently valid obligation. See the [replay rejection contract](coordination-replay-rejection-design.md).
 
 When delivered unresolved obligations remain after a newly committed Answer, the runtime offers one neutral continuation unless native input already provides one. Before each model generation, a compact ID/requester/title listing of the current outstanding set replaces earlier attention snapshots in context and leaves work order to the Agent. Full instructions remain available through Request inspection instead of being repeated in every snapshot. Input already consumed after Answer counts as that continuation opportunity. With no remaining obligations, Answer creates no summary turn. Pi can still continue queued input before `agent_settled`.
 
