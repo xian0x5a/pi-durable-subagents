@@ -84,7 +84,7 @@ faux.setResponses(process.env.PROCESS_RUNTIME_COORDINATION_TOOLS === "1"
 		], { stopReason: "toolUse" }),
 		delayedResponse,
 	]
-	: Array.from({ length: 24 }, () => delayedResponse));
+	: Array.from({ length: 32 }, () => delayedResponse));
 
 if (process.env.PROCESS_RUNTIME_ACTIVATED_TOOL === "1") {
 	faux.setResponses([

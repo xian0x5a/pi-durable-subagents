@@ -172,7 +172,6 @@ test("module preflight rejects every required host export and prototype seam", (
 		["defineTool"],
 		["getPackageDir"],
 		["hasTrustRequiringProjectResources"],
-		["shouldCompact"],
 		["CURRENT_SESSION_VERSION"],
 		["InteractiveMode", "prototype", "getUserInput"],
 		["AgentSessionRuntime", "prototype", "setRebindSession"],
@@ -281,7 +280,6 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 			"getShowHardwareCursor",
 			"getThemeSetting",
 			"isProjectTrusted",
-			"getCompactionSettings",
 			"getExternalEditorCommand",
 		].map((member) => [
 			["services", "settingsManager", member],
@@ -324,7 +322,6 @@ test("live preflight rejects every required runtime and AgentSession seam", asyn
 			"getShowHardwareCursor",
 			"getThemeSetting",
 			"isProjectTrusted",
-			"getCompactionSettings",
 			"getExternalEditorCommand",
 		].map((member) => [
 			["session", "settingsManager", member],

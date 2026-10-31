@@ -31,11 +31,13 @@ const deliveryMessage = createMessageDelivery([{
 	projection: preparation.prospectiveRequest,
 }]);
 const replacementType = "test.compaction-replacement";
+const TEST_MODEL_KEY = "coordination-test/deterministic-owner";
+// Long enough for an in-memory Control request to reach the child.
+const CONTROL_ARRIVAL_MS = 50;
 
 const paths = [
 	{ name: "optional working zone", tokens: 120_000, preparation },
 	{ name: "mandatory working zone", tokens: 190_000, preparation },
-	{ name: "native threshold", tokens: 190_000, preparation: undefined },
 ] as const;
 const cases = [
 	...paths.flatMap((path) => [false, true].flatMap((replacementFinishesFirst) =>
@@ -164,7 +166,7 @@ for (const { path, replacementFinishesFirst, deliveryMode } of cases) {
 			await scheduler.admit(record, {
 				messageId: "actual-request",
 				deliveryMode,
-				...(path.preparation ? { contextPreparation: path.preparation.intent } : {}),
+				contextPreparation: path.preparation.intent,
 				deliveryItem: {
 					source: { agentId: "requester", entryId: "source-entry", toolCallId: "source-call" },
 					projection: preparation.prospectiveRequest,
@@ -363,6 +365,289 @@ test("cancelled child reminder preparation leaves no delivery and permits one la
 	assert.equal(host.session.sessionManager.getEntries().filter(entry =>
 		entry.type === "custom_message" && entry.customType === "agent-coordination.moderator-obligation-reminder").length, 1);
 });
+
+// The faux model's 16,384-token window puts Pi's threshold at 8,384 tokens.
+const NATIVE_THRESHOLD_SETTINGS = { compaction: { enabled: true, reserveTokens: 8_000, keepRecentTokens: 24 } };
+const BELOW_THRESHOLD_TOKENS = 7_000;
+const ABOVE_THRESHOLD_TOKENS = 9_000;
+const TOKEN_CHARS = 4;
+
+test("a tool result past Pi's threshold compacts inside a delivered Run before the next response", { timeout: 5_000 }, async t => {
+	const failedCompactions: Array<Readonly<{ reason: string; aborted: boolean }>> = [];
+	const { host, proxy } = await createChildControlLoopback(t, { host: { settings: NATIVE_THRESHOLD_SETTINGS }, configure: pi => {
+		pi.registerTool({
+			name: "read_large", label: "Read large", description: "Read a large result.",
+			parameters: Type.Object({}),
+			async execute() {
+				return { content: [{ type: "text", text: "R".repeat(2_500 * TOKEN_CHARS) }], details: {} };
+			},
+		});
+		pi.on("session_compact_failed", event => { failedCompactions.push({ reason: event.reason, aborted: event.aborted }); });
+	} });
+	const session = host.session;
+	seedHistory(session, BELOW_THRESHOLD_TOKENS);
+	const requestSizes: number[] = [];
+	const respond = summaryOr(context => {
+		requestSizes.push(JSON.stringify(context.messages).length);
+		return requestSizes.length === 1
+			? fauxAssistantMessage(fauxToolCall("read_large", {}, { id: "large-read" }), { stopReason: "toolUse" })
+			: fauxAssistantMessage("Finished after compaction.");
+	});
+	host.model.setResponses([respond, respond, respond, respond]);
+
+	await proxy.deliver({ kind: "user", content: "Read the large result." }).completion;
+	await session.waitForIdle();
+
+	assert.deepEqual(failedCompactions, [], "Pi's mid-Run threshold compaction must not be cancelled");
+	const entries = session.sessionManager.getEntries();
+	const toolResult = entries.findIndex(entry => entry.type === "message" && entry.message.role === "toolResult");
+	const compaction = entries.findIndex(entry => entry.type === "compaction");
+	const finalResponse = entries.findLastIndex(entry => entry.type === "message" && entry.message.role === "assistant");
+	assert.ok(toolResult !== -1 && toolResult < compaction && compaction < finalResponse,
+		`compaction lands between the tool result and the next response: ${JSON.stringify({ toolResult, compaction, finalResponse })}`);
+	assert.equal(requestSizes.length, 2);
+	assert.ok(requestSizes[1]! < requestSizes[0]!, `the next request must shrink: ${requestSizes.join(" -> ")}`);
+});
+
+test("a Delivery arriving during a branch summary completes after the summary ends", { timeout: 5_000 }, async t => {
+	const summaryEntered = deferred();
+	const releaseSummary = deferred();
+	t.after(releaseSummary.resolve);
+	const { host, ownerChannel } = await createChildControlLoopback(t, { host: { settings: COMPACTION_SETTINGS } });
+	const session = host.session;
+	const manager = session.sessionManager;
+	manager.appendMessage({ role: "user", content: "Abandoned branch base.", timestamp: Date.now() });
+	const branchPoint = manager.appendMessage(fauxAssistantMessage("Branch point."));
+	manager.appendMessage({ role: "user", content: "Abandoned work.", timestamp: Date.now() });
+	manager.appendMessage(fauxAssistantMessage("Abandoned response."));
+	session.agent.state.messages = manager.buildSessionContext().messages;
+	// Faux responses are consumed in order, so only the summary request waits.
+	host.model.setResponses([
+		async () => {
+			summaryEntered.resolve();
+			await releaseSummary.promise;
+			return fauxAssistantMessage("Branch summary.");
+		},
+		fauxAssistantMessage("Delivery handled."),
+	]);
+
+	const navigation = session.navigateTree(branchPoint, { summarize: true });
+	await summaryEntered.promise;
+	assert.equal(session.isCompacting, true);
+	const dispatch = deliverCustom(ownerChannel, "during-branch-summary");
+	await sleep(CONTROL_ARRIVAL_MS);
+	assert.equal(session.isCompacting, true, "the Delivery reached the child while the summary was still running");
+	releaseSummary.resolve();
+	await navigation;
+
+	const delivered = await settledWithin(dispatch, 2_000, "Delivery waiting on a branch summary");
+	assert.equal(delivered.transcriptCommitted, true);
+	await session.waitForIdle();
+	const entries = manager.getEntries();
+	const summary = entries.findIndex(entry => entry.type === "branch_summary");
+	const custom = entries.findIndex(entry => entry.type === "custom_message");
+	assert.ok(summary !== -1 && summary < custom, `the Delivery commits after the summary: ${summary}, ${custom}`);
+});
+
+test("native threshold compaction for an idle custom Delivery runs as Pi's own threshold compaction", { timeout: 5_000 }, async t => {
+	const reasons: string[] = [];
+	const { host, ownerChannel } = await createChildControlLoopback(t, { host: { settings: NATIVE_THRESHOLD_SETTINGS }, configure: pi => {
+		pi.on("session_before_compact", event => { reasons.push(`before:${event.reason}`); });
+		pi.on("session_compact", event => { reasons.push(`after:${event.reason}`); });
+	} });
+	const session = host.session;
+	seedHistory(session, ABOVE_THRESHOLD_TOKENS);
+	const respond = summaryOr(() => fauxAssistantMessage("Delivery handled."));
+	host.model.setResponses([respond, respond, respond]);
+
+	assert.equal((await deliverCustom(ownerChannel, "over-threshold")).transcriptCommitted, true);
+	await session.waitForIdle();
+
+	assert.deepEqual(reasons, ["before:threshold", "after:threshold"]);
+	const entries = session.sessionManager.getEntries();
+	const compaction = entries.findIndex(entry => entry.type === "compaction");
+	const custom = entries.findIndex(entry => entry.type === "custom_message");
+	assert.ok(compaction !== -1 && compaction < custom, `compaction precedes the Delivery: ${compaction}, ${custom}`);
+});
+
+test("a per-model reserve override keeps an idle custom Delivery from compacting early", { timeout: 5_000 }, async t => {
+	const compactionReasons: string[] = [];
+	const globalReserveTokens = 12_000;
+	const modelReserveTokens = 2_000;
+	const { host, ownerChannel } = await createChildControlLoopback(t, { host: { settings: { compaction: {
+		enabled: true, reserveTokens: globalReserveTokens, keepRecentTokens: 24,
+		modelOverrides: { [TEST_MODEL_KEY]: { reserveTokens: modelReserveTokens } },
+	} } }, configure: pi => {
+		pi.on("session_before_compact", event => { compactionReasons.push(event.reason); });
+	} });
+	const session = host.session;
+	seedHistory(session, BELOW_THRESHOLD_TOKENS);
+	const usage = session.getContextUsage();
+	assert.ok(usage && usage.tokens !== null);
+	assert.equal(`${session.model?.provider}/${session.model?.id}`, TEST_MODEL_KEY);
+	assert.ok(usage.tokens > usage.contextWindow - globalReserveTokens && usage.tokens < usage.contextWindow - modelReserveTokens,
+		`context ${usage.tokens} sits between both limits`);
+	host.model.setResponses([fauxAssistantMessage("Delivery handled.")]);
+
+	assert.equal((await deliverCustom(ownerChannel, "between-limits")).transcriptCommitted, true);
+	await session.waitForIdle();
+
+	assert.deepEqual(compactionReasons, []);
+	assert.equal(session.sessionManager.getEntries().some(entry => entry.type === "compaction"), false);
+});
+
+// Contract guard: holds today through the gateway's own compaction, and must
+// keep holding once Pi compacts inside the custom start.
+test("cancelling a Delivery while Pi compacts for its custom start leaves it uncommitted", { timeout: 5_000 }, async t => {
+	const compactionEntered = deferred();
+	const releaseCompaction = deferred();
+	t.after(releaseCompaction.resolve);
+	const { host, ownerChannel } = await createChildControlLoopback(t, { host: { settings: NATIVE_THRESHOLD_SETTINGS }, configure: pi => {
+		pi.on("session_before_compact", async () => {
+			compactionEntered.resolve();
+			await releaseCompaction.promise;
+		});
+	} });
+	const session = host.session;
+	seedHistory(session, ABOVE_THRESHOLD_TOKENS);
+	let deliveryRequests = 0;
+	const respond = summaryOr(() => { deliveryRequests++; return fauxAssistantMessage("Cancelled Delivery ran."); });
+	host.model.setResponses([respond, respond, respond]);
+
+	const dispatch = deliverCustom(ownerChannel, "cancelled-during-compaction");
+	const rejected = assert.rejects(dispatch, /child_turn_admission_cancelled/);
+	await compactionEntered.promise;
+	assert.equal(session.isCompacting, true);
+	assert.deepEqual(await ownerChannel.request("message.cancel", { deliveryId: "cancelled-during-compaction" }), { accepted: true });
+	releaseCompaction.resolve();
+	await rejected;
+	await session.waitForIdle();
+
+	assert.equal(deliveryRequests, 0);
+	assert.equal(session.pendingMessageCount, 0);
+	assert.equal(session.sessionManager.getEntries().some(entry => entry.type === "custom_message"), false);
+});
+
+test("cancelling a Delivery parked behind Pi's mid-Run compaction lets that compaction complete", { timeout: 5_000 }, async t => {
+	const compactionEntered = deferred();
+	const releaseCompaction = deferred();
+	t.after(releaseCompaction.resolve);
+	let compactionSignal: AbortSignal | undefined;
+	const { host, proxy, ownerChannel } = await createChildControlLoopback(t, { host: { settings: NATIVE_THRESHOLD_SETTINGS }, configure: pi => {
+		pi.registerTool({
+			name: "read_large", label: "Read large", description: "Read a large result.",
+			parameters: Type.Object({}),
+			async execute() { return { content: [{ type: "text", text: "R".repeat(2_500 * TOKEN_CHARS) }], details: {} }; },
+		});
+		pi.on("session_before_compact", async event => {
+			compactionSignal = event.signal;
+			compactionEntered.resolve();
+			await releaseCompaction.promise;
+		});
+	} });
+	const session = host.session;
+	seedHistory(session, BELOW_THRESHOLD_TOKENS);
+	let requests = 0;
+	const respond = summaryOr(() => {
+		requests++;
+		return requests === 1
+			? fauxAssistantMessage(fauxToolCall("read_large", {}, { id: "large-read" }), { stopReason: "toolUse" })
+			: fauxAssistantMessage("Finished after compaction.");
+	});
+	host.model.setResponses([respond, respond, respond, respond]);
+
+	const run = proxy.deliver({ kind: "user", content: "Read the large result." }).completion;
+	await compactionEntered.promise;
+	const parked = deliverCustom(ownerChannel, "parked-behind-compaction", "steer");
+	void parked.catch(() => undefined);
+	await sleep(CONTROL_ARRIVAL_MS);
+	await ownerChannel.request("message.cancel", { deliveryId: "parked-behind-compaction" });
+	const abortedWhileCancelled = compactionSignal?.aborted;
+	releaseCompaction.resolve();
+	await run;
+	await session.waitForIdle();
+
+	assert.equal(abortedWhileCancelled, false, "cancelling the parked Delivery must not abort Pi's compaction");
+	assert.equal(session.sessionManager.getEntries().some(entry => entry.type === "compaction"), true, "Pi's compaction is written");
+	assert.equal(session.sessionManager.getEntries().some(entry => entry.type === "custom_message"), false, "the cancelled Delivery stays uncommitted");
+});
+
+test("reloading a generation while its compaction-finished report is held leaves the Owner no longer compacting", { timeout: 5_000 }, async t => {
+	const inputEntered = deferred();
+	const releaseInput = deferred();
+	t.after(releaseInput.resolve);
+	const loopback = await createChildControlLoopback(t, { host: { settings: NATIVE_THRESHOLD_SETTINGS }, configure: pi => {
+		pi.on("input", async () => { inputEntered.resolve(); await releaseInput.promise; return { action: "continue" }; });
+	} });
+	const { host, proxy } = loopback;
+	const session = host.session;
+	seedHistory(session, ABOVE_THRESHOLD_TOKENS);
+	const respond = summaryOr(() => fauxAssistantMessage("Done."));
+	host.model.setResponses([respond, respond, respond, respond]);
+	let queued: Promise<void> | undefined;
+	session.subscribe(event => {
+		// Mirrors interactive mode flushing queued input when compaction ends.
+		if (event.type === "compaction_end" && !queued) {
+			queued = session.prompt("queued", { streamingBehavior: "steer", source: "extension" });
+			void queued.catch(() => undefined);
+		}
+	});
+
+	await session.compact();
+	await inputEntered.promise;
+	await loopback.reload();
+	releaseInput.resolve();
+	await queued;
+	await session.waitForIdle();
+	await sleep(CONTROL_ARRIVAL_MS);
+
+	assert.equal(proxy.isCompacting(), false);
+	assert.equal(proxy.hasPendingActivity(), false);
+});
+
+/** Seeds compactable history whose estimate alone decides Pi's threshold checks. */
+function seedHistory(session: ChildControlLoopback["host"]["session"], totalTokens: number): void {
+	const pairs = 3;
+	const line = "Prior context. ";
+	const userChars = totalTokens * TOKEN_CHARS / pairs;
+	for (let index = 0; index < pairs; index++) {
+		session.sessionManager.appendMessage({
+			role: "user", content: line.repeat(Math.ceil(userChars / line.length)), timestamp: Date.now(),
+		});
+		session.sessionManager.appendMessage(fauxAssistantMessage("Prior response."));
+	}
+	session.agent.state.messages = session.sessionManager.buildSessionContext().messages;
+}
+
+/** Answers Pi's summarizer calls, whose number depends on the cut point, and leaves the rest to `respond`. */
+function summaryOr(respond: FauxResponseStep): FauxResponseStep {
+	return (context, options, state, model) => getCurrentSystemPrompt(context.messages)?.includes("context summarization assistant")
+		? fauxAssistantMessage("Compacted summary.")
+		: typeof respond === "function" ? respond(context, options, state, model) : respond;
+}
+
+function deliverCustom(ownerChannel: ChildControlLoopback["ownerChannel"], deliveryId: string, deliverAs?: "steer") {
+	return ownerChannel.request("message.deliver", { deliveryId, proveCommit: true, delivery: {
+		kind: "custom", message: {
+			...deliveryMessage, details: { messages: [...deliveryMessage.details.messages] },
+		}, triggerTurn: true, ...(deliverAs ? { deliverAs } : {}),
+	} });
+}
+
+async function settledWithin<T>(work: Promise<T>, timeoutMs: number, description: string): Promise<T> {
+	let timer: NodeJS.Timeout | undefined;
+	try {
+		return await Promise.race([work, new Promise<never>((_resolve, reject) => {
+			timer = setTimeout(() => reject(new Error(`${description} did not settle within ${timeoutMs} ms`)), timeoutMs);
+		})]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+function sleep(milliseconds: number): Promise<void> {
+	return new Promise(resolve => setTimeout(resolve, milliseconds));
+}
 
 function lastStartedRunId(events: readonly ChildControlLoopback["events"][number][]): string | undefined {
 	return events.findLast(event => event.event === "agent.start")?.payload.runId;

@@ -14,6 +14,7 @@ export class PendingNativeStarts {
 	#inInput = 0;
 	#pastInput = 0;
 	#fencedPreparing = 0;
+	readonly #runsStarting = new Set<object>();
 	#notifyChange: (() => void) | undefined;
 	#change: Promise<void> | undefined;
 
@@ -26,7 +27,7 @@ export class PendingNativeStarts {
 				...options,
 				preflightResult: disposition => {
 					// A handled or queued prompt starts no Run; a started one stays open until it settles.
-					if (disposition === "started") call.leaveInput();
+					if (disposition === "started") call.awaitRun();
 					else call.close();
 					options?.preflightResult?.(disposition);
 				},
@@ -52,6 +53,18 @@ export class PendingNativeStarts {
 		return this.#pastInput > 0;
 	}
 
+	/** A prompt Pi accepted to start a Run has not reported that Run yet. */
+	get runStarting(): boolean {
+		return this.#runsStarting.size > 0;
+	}
+
+	/** Pi reported a Run start, which is the Run any accepted prompt was waiting for. */
+	runStarted(): void {
+		if (this.#runsStarting.size === 0) return;
+		this.#runsStarting.clear();
+		this.#changed();
+	}
+
 	/** A start its own cancellation fence may still fail at native start is preparing. */
 	get fencedStartPreparing(): boolean {
 		return this.#fencedPreparing > 0;
@@ -73,7 +86,7 @@ export class PendingNativeStarts {
 		};
 	}
 
-	/** Settles when a call opens, changes phase or closes, or a fenced start is released. */
+	/** Settles when a call opens, changes phase or closes, a Run starts, or a fenced start is released. */
 	nextChange(): Promise<void> {
 		return this.#change ??= new Promise(resolve => { this.#notifyChange = resolve; });
 	}
@@ -94,9 +107,16 @@ export class PendingNativeStarts {
 			count(1);
 			this.#changed();
 		};
-		const close = () => move("closed");
+		const call = {};
+		const close = () => {
+			this.#runsStarting.delete(call);
+			move("closed");
+		};
 		return {
-			leaveInput: () => move("pastInput"),
+			awaitRun: () => {
+				this.#runsStarting.add(call);
+				move("pastInput");
+			},
 			close,
 			track(call: () => Promise<void>): Promise<void> {
 				let completion: Promise<void>;

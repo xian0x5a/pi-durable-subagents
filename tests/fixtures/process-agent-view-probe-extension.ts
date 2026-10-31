@@ -7,6 +7,9 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 
 const isProcessChild = process.env.PI_DURABLE_SUBAGENTS_BOOTSTRAP !== undefined;
+const SLOW_START_COMPACTION_SCENARIO = "compaction-retention-slow-start";
+// Well past any short settlement guess between compaction_end and agent_start.
+const SLOW_START_DELAY_MS = 400;
 
 class AgentViewProbeEditor extends CustomEditor {
 	readonly #identity: string;
@@ -264,7 +267,7 @@ const processAgentViewProbe: ExtensionFactory = (pi) => {
 			return { action: "handled" };
 		});
 	}
-	if (activeScenario === "compaction-retention") {
+	if (activeScenario === "compaction-retention" || activeScenario === SLOW_START_COMPACTION_SCENARIO) {
 		pi.on("session_before_compact", async (event, ctx) => {
 			record({ kind: "compaction_started", sessionId: ctx.sessionManager.getSessionId() });
 			await waitForRelease();
@@ -278,6 +281,18 @@ const processAgentViewProbe: ExtensionFactory = (pi) => {
 		});
 		pi.on("session_compact", (_event, ctx) => {
 			record({ kind: "compaction_completed", sessionId: ctx.sessionManager.getSessionId() });
+		});
+	}
+	if (activeScenario === SLOW_START_COMPACTION_SCENARIO) {
+		let compactionAwaitsStart = false;
+		pi.on("session_compact", () => {
+			compactionAwaitsStart = true;
+		});
+		pi.on("before_agent_start", async (_event, ctx) => {
+			if (!compactionAwaitsStart) return;
+			compactionAwaitsStart = false;
+			record({ kind: "slow_start_entered", sessionId: ctx.sessionManager.getSessionId() });
+			await new Promise<void>((resolve) => setTimeout(resolve, SLOW_START_DELAY_MS));
 		});
 	}
 

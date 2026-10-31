@@ -87,6 +87,8 @@ export class NativeSessionDriver {
 	#submissionsInFlight = 0;
 	#unsubscribeSession: (() => void) | undefined;
 	#compacting: boolean;
+	/** Advances on every compaction edge, so only the latest may report the end. */
+	#compactionEdge = 0;
 	#disposed = false;
 
 	constructor(session: AgentSession) {
@@ -177,13 +179,16 @@ export class NativeSessionDriver {
 		return this.#session.isIdle;
 	}
 
-	/** Follows Pi's compaction edges; its flag stays set briefly after auto-compaction ends. */
+	/**
+	 * Follows Pi's compaction edges, not its flag: the flag also covers branch
+	 * summaries and outlives a failed automatic compaction.
+	 */
 	isCompacting(): boolean {
 		return this.#compacting;
 	}
 
 	hasPendingActivity(): boolean {
-		return this.#session.isCompacting || this.#session.pendingMessageCount > 0;
+		return this.#compacting || this.#session.isCompacting || this.#session.pendingMessageCount > 0;
 	}
 
 	/** The active Run's own cancellation signal. */
@@ -209,6 +214,8 @@ export class NativeSessionDriver {
 		if (this.#submissionsInFlight === 0) this.#removeStartObserver();
 		this.#unsubscribeSession?.();
 		this.#unsubscribeSession = undefined;
+		// An end edge still held dies with this generation, and the Owner outlives a reload.
+		if (this.#compacting) this.#setCompacting(false);
 		this.#listeners.clear();
 		for (const proof of this.#proofs) proof.reject(new Error("native_session_driver_disposed"));
 	}
@@ -370,11 +377,15 @@ export class NativeSessionDriver {
 	}
 
 	#handleSessionEvent(event: AgentSessionEvent): void {
-		if (event.type === "agent_start") this.#emit({ type: "run_started" });
-		else if (event.type === "compaction_start" || event.type === "compaction_end") {
+		if (event.type === "agent_start") {
+			this.#pendingStarts.runStarted();
+			this.#emit({ type: "run_started" });
+		} else if (event.type === "compaction_start") {
+			this.#compactionEdge += 1;
+			this.#setCompacting(true);
+		} else if (event.type === "compaction_end") {
 			// Pi emits the end edge for success, failure, and cancellation alike.
-			this.#compacting = event.type === "compaction_start";
-			this.#emit({ type: "compaction_changed", compacting: this.#compacting });
+			void this.#finishCompaction(++this.#compactionEdge);
 		} else if (event.type === "queue_update" || event.type === "thinking_level_changed") {
 			this.#emit({ type: "state_changed" });
 		} else if (event.type === "agent_end") {
@@ -404,6 +415,26 @@ export class NativeSessionDriver {
 				? {}
 				: { failure: { stage: "model", error: assistant.errorMessage, provenance: MODEL_FAILURE_PROVENANCE } }),
 		};
+	}
+
+	/**
+	 * Pi's interactive mode hands input queued during compaction to `session.prompt`
+	 * inside `compaction_end`, before any public state shows it. Report the end only
+	 * once that input resolved or its Run started, so a release check that follows
+	 * sees the successor Run instead of an idle session.
+	 */
+	async #finishCompaction(edge: number): Promise<void> {
+		// Wait out Pi's synchronous emit: later listeners may submit that input.
+		await Promise.resolve();
+		while (this.#pendingStarts.inInput || this.#pendingStarts.runStarting) {
+			await this.#pendingStarts.nextChange();
+		}
+		if (!this.#disposed && edge === this.#compactionEdge) this.#setCompacting(false);
+	}
+
+	#setCompacting(compacting: boolean): void {
+		this.#compacting = compacting;
+		this.#emit({ type: "compaction_changed", compacting });
 	}
 
 	#emit(event: NativeSessionEvent): void {
