@@ -272,7 +272,7 @@ function bindGeneration(
 	const driver = new NativeSessionDriver(session);
 	const reminderAdmission = new ModeratorReminderAdmission({
 		admit: operation => turnCompaction.admit(operation),
-		prepare: () => turnCompaction.prepareIdleCustomTurn(),
+		prepare: () => turnCompaction.waitForCompaction(),
 		isIdle: () => driver.canStartIdleTurn(),
 		// Proof is child-local: no Owner reconciliation or host lane is needed. The
 		// reservation already holds the gateway admission, so only its generation fences.
@@ -434,8 +434,11 @@ function bindGeneration(
 				admissionSignal.throwIfAborted();
 				await turnCompaction.waitForCompaction();
 				checkpoint();
-				if (session.isIdle && delivery.kind === "custom" && delivery.triggerTurn) {
-					await turnCompaction.prepareIdleCustomTurn(delivery.workingZonePreparation);
+				if (
+					session.isIdle && delivery.kind === "custom" && delivery.triggerTurn &&
+					delivery.workingZonePreparation
+				) {
+					await turnCompaction.prepareWorkingZone(delivery.workingZonePreparation);
 				}
 				checkpoint();
 				admissionSignal.throwIfAborted();

@@ -55,7 +55,6 @@ export function assertHostModuleShape(hostValue: unknown): void {
 		"getAgentDir",
 		"getPackageDir",
 		"hasTrustRequiringProjectResources",
-		"shouldCompact",
 	] as const) {
 		requireFunction(host, factoryName, factoryName, version);
 	}
@@ -326,7 +325,6 @@ function assertSettingsManagerShape(
 		"getShowHardwareCursor",
 		"getThemeSetting",
 		"isProjectTrusted",
-		"getCompactionSettings",
 		"getExternalEditorCommand",
 	] as const) {
 		requireFunction(settingsManager, member, `${name}.${member}`, version);

@@ -27,7 +27,6 @@ const preparation: WorkingZonePreparation = {
 function fakeSession(options: {
 	tokens: number | null;
 	autoCompactionEnabled?: boolean;
-	settingsEnabled?: boolean;
 	compactError?: Error;
 }) {
 	const compactInstructions: Array<string | undefined> = [];
@@ -44,13 +43,6 @@ function fakeSession(options: {
 			contextWindow: 200_000,
 			percent: options.tokens === null ? null : options.tokens / 2_000,
 		}),
-		settingsManager: {
-			getCompactionSettings: () => ({
-				enabled: options.settingsEnabled ?? true,
-				reserveTokens: 16_000,
-				keepRecentTokens: 20_000,
-			}),
-		},
 		compact: async (customInstructions?: string) => {
 			compactInstructions.push(customInstructions);
 			if (options.compactError) throw options.compactError;
@@ -69,7 +61,7 @@ test("each working-zone admission calls the active strategy once with prospectiv
 	const warnings: string[] = [];
 	const gateway = new ChildTurnCompactionGateway(session, (warning) => warnings.push(warning));
 
-	await gateway.prepareIdleCustomTurn(preparation);
+	await gateway.prepareWorkingZone(preparation);
 
 	assert.equal(compactInstructions.length, 1);
 	assert.match(
@@ -80,19 +72,18 @@ test("each working-zone admission calls the active strategy once with prospectiv
 	assert.match(compactInstructions[0] ?? "", /Do not include or paraphrase it/);
 	assert.deepEqual(warnings, []);
 
-	await gateway.prepareIdleCustomTurn(preparation);
+	await gateway.prepareWorkingZone(preparation);
 	assert.equal(compactInstructions.length, 2);
 });
 
 test("working-zone preparation skips disabled automatic compaction and unknown usage", async () => {
 	for (const options of [
 		{ tokens: 100_000, autoCompactionEnabled: false },
-		{ tokens: 100_000, settingsEnabled: false },
 		{ tokens: null },
 	] as const) {
 		const { session, compactInstructions } = fakeSession(options);
 		const gateway = new ChildTurnCompactionGateway(session);
-		await gateway.prepareIdleCustomTurn(preparation);
+		await gateway.prepareWorkingZone(preparation);
 		assert.deepEqual(compactInstructions, []);
 	}
 });
@@ -105,24 +96,12 @@ test("optional below-native failure warns and continues without another attempt"
 	const warnings: string[] = [];
 	const gateway = new ChildTurnCompactionGateway(session, (warning) => warnings.push(warning));
 
-	await gateway.prepareIdleCustomTurn(preparation);
+	await gateway.prepareWorkingZone(preparation);
 
 	assert.equal(compactInstructions.length, 1);
 	assert.deepEqual(warnings, [
 		"Working-Zone Preparation failed; continuing Request Delivery: optional strategy failed",
 	]);
-});
-
-test("no compaction work at Pi's native threshold keeps existing no-op behavior", async () => {
-	for (const message of ["Nothing to compact (session too small)", "Already compacted"]) {
-		const { session, compactInstructions } = fakeSession({
-			tokens: 190_000,
-			compactError: new Error(message),
-		});
-		const gateway = new ChildTurnCompactionGateway(session);
-		await gateway.prepareIdleCustomTurn(preparation);
-		assert.equal(compactInstructions.length, 1);
-	}
 });
 
 test("Runtime-generation disposal fences a prepared admission after compaction returns", async () => {
@@ -137,7 +116,7 @@ test("Runtime-generation disposal fences a prepared admission after compaction r
 		};
 	const gateway = new ChildTurnCompactionGateway(session);
 	const admission = gateway.admitDelivery("prepared-run", () =>
-		gateway.prepareIdleCustomTurn(preparation)
+		gateway.prepareWorkingZone(preparation)
 	);
 	while (compactInstructions.length === 0) await new Promise((resolve) => setImmediate(resolve));
 	gateway.dispose();
@@ -145,24 +124,9 @@ test("Runtime-generation disposal fences a prepared admission after compaction r
 	await assert.rejects(admission, /child_turn_compaction_gateway_disposed/);
 });
 
-test("failure at Pi's native threshold remains blocking", async () => {
-	const { session, compactInstructions } = fakeSession({
-		tokens: 190_000,
-		compactError: new Error("native threshold strategy failed"),
-	});
-	const gateway = new ChildTurnCompactionGateway(session);
-
-	await assert.rejects(
-		gateway.prepareIdleCustomTurn(preparation),
-		/native threshold strategy failed/,
-	);
-	assert.equal(compactInstructions.length, 1);
-});
-
 const preparationPaths = [
-	{ name: "optional working zone", tokens: 120_000, preparation },
-	{ name: "mandatory working zone", tokens: 190_000, preparation },
-	{ name: "native threshold", tokens: 190_000, preparation: undefined },
+	{ name: "optional working zone", tokens: 120_000 },
+	{ name: "mandatory working zone", tokens: 190_000 },
 ] as const;
 
 const PI_COMPACTION_SETTINGS = { compaction: { enabled: true, reserveTokens: 16_000, keepRecentTokens: 24 } };
@@ -228,7 +192,7 @@ for (const path of preparationPaths) {
 		const gateway = new ChildTurnCompactionGateway(session, (warning) => warnings.push(warning));
 
 		await gateway.admitDelivery("run", () =>
-			gateway.prepareIdleCustomTurn(path.preparation)
+			gateway.prepareWorkingZone(preparation)
 		);
 
 		assert.equal(attempts(), 1);
@@ -236,21 +200,18 @@ for (const path of preparationPaths) {
 	});
 
 	test(`${path.name} does not infer cancellation from an error string`, async () => {
-		const failure = new Error("Compaction cancelled");
-		const { session } = fakeSession({ tokens: path.tokens, compactError: failure });
+		const { session } = fakeSession({
+			tokens: path.tokens,
+			compactError: new Error("Compaction cancelled"),
+		});
 		const warnings: string[] = [];
 		const gateway = new ChildTurnCompactionGateway(session, (warning) => warnings.push(warning));
-		const preparing = gateway.prepareIdleCustomTurn(path.preparation);
 
-		if (path.name === "optional working zone") {
-			await preparing;
-			assert.deepEqual(warnings, [
-				"Working-Zone Preparation failed; continuing Request Delivery: Compaction cancelled",
-			]);
-		} else {
-			await assert.rejects(preparing, (error) => error === failure);
-			assert.deepEqual(warnings, []);
-		}
+		await gateway.prepareWorkingZone(preparation);
+
+		assert.deepEqual(warnings, [
+			"Working-Zone Preparation failed; continuing Request Delivery: Compaction cancelled",
+		]);
 	});
 
 	for (const invalidation of ["owner cancellation", "generation disposal"] as const) {
@@ -265,7 +226,7 @@ for (const path of preparationPaths) {
 			gateway = new ChildTurnCompactionGateway(session, (warning) => warnings.push(warning));
 
 			await assert.rejects(
-				gateway.admitDelivery("run", () => gateway.prepareIdleCustomTurn(path.preparation)),
+				gateway.admitDelivery("run", () => gateway.prepareWorkingZone(preparation)),
 				invalidation === "owner cancellation"
 					? /child_turn_admission_cancelled: run/
 					: /child_turn_compaction_gateway_disposed/,

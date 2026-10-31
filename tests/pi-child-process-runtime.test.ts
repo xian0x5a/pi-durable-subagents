@@ -959,17 +959,24 @@ test("an idle child defers threshold compaction until later work is admitted", {
 			index < queuedDeliveryIndex
 		), true);
 
-		await runtime.channel.request("message.deliver", {
-			deliveryId: "test-delivery-13",
-			proveCommit: true,
-			delivery: {
-				kind: "user",
-				content: `Leave a large deferred context.${" padding context".repeat(400)}`,
-			},
-		});
-		await waitUntil(() => runtimeEvents.some((event) =>
-			event.event === "message.dispatch.completed" && event.payload.deliveryId === "test-delivery-13"
-		));
+		const { channel } = runtime;
+		// Pi's compaction outlives a cancelled Delivery, so each scenario that needs
+		// a threshold compaction at its start first rebuilds the context to compact.
+		const leaveLargeDeferredContext = async (deliveryId: string) => {
+			await channel.request("message.deliver", {
+				deliveryId,
+				proveCommit: true,
+				delivery: {
+					kind: "user",
+					content: `Leave a large deferred context.${" padding context".repeat(400)}`,
+				},
+			});
+			await waitUntil(() => runtimeEvents.some((event) =>
+				event.event === "message.dispatch.completed" && event.payload.deliveryId === deliveryId
+			));
+		};
+
+		await leaveLargeDeferredContext("test-delivery-13");
 
 		const cancelledMessage = createMessageDelivery([{
 			source: {
@@ -1031,6 +1038,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 				content: "Interruption must fence this Delivery during preparation.",
 			},
 		}]);
+		await leaveLargeDeferredContext("test-delivery-14-context");
 		const failuresBeforeInterruption = runtimeEvents.filter(event => event.event === "agent.end" && event.payload.outcome === "error").length;
 		const compactionStartsBeforeInterruption = runtimeEvents.filter((event) =>
 			event.event === "runtime.compaction.started"
@@ -1047,9 +1055,14 @@ test("an idle child defers threshold compaction until later work is admitted", {
 				triggerTurn: true,
 			},
 		});
-		const interruptedDeliveryOutcome = interruptedDelivery.then(
-			() => undefined,
-			(error: unknown) => error,
+		// Cancellation lands before or after admission hands over to Pi's own start,
+		// which report it as a rejection or as an uncommitted answer.
+		const interruptedDeliveryCommitted = interruptedDelivery.then(
+			(result) => result.transcriptCommitted,
+			(error: unknown) => {
+				assert.match(String(error), /child_turn_admission_cancelled/);
+				return false;
+			},
 		);
 		await waitUntil(() => runtimeEvents.filter((event) =>
 			event.event === "runtime.compaction.started"
@@ -1057,7 +1070,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 		assert.deepEqual(await runtime.channel.request("message.cancel", {
 			deliveryId: "test-delivery-15",
 		}), { accepted: true });
-		assert.match(String(await interruptedDeliveryOutcome), /child_turn_admission_cancelled/);
+		assert.equal(await interruptedDeliveryCommitted, false);
 		assert.equal(runtimeEvents.filter(event => event.event === "agent.end" && event.payload.outcome === "error").length, failuresBeforeInterruption);
 		assert.equal(SessionManager.open(sessionPath).getEntries().some((entry) =>
 			entry.type === "custom_message" && entry.content === interruptedMessage.content
@@ -1100,6 +1113,7 @@ test("an idle child defers threshold compaction until later work is admitted", {
 			event.event === "runtime.compaction.started"
 		).length, compactionStartsBeforeNonTurnDelivery);
 
+		await leaveLargeDeferredContext("test-delivery-16-context");
 		const userDeliveryInput = "Prepare deferred context before this idle user Delivery.";
 		const entriesBeforeUserDelivery = SessionManager.open(sessionPath).getEntries();
 		const compactionsBeforeUserDelivery = entriesBeforeUserDelivery

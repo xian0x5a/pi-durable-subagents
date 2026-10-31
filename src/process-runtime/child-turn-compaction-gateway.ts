@@ -1,6 +1,5 @@
 import {
 	estimateTokens,
-	shouldCompact,
 	type AgentSession,
 	type SessionBeforeCompactEvent,
 } from "@earendil-works/pi-coding-agent";
@@ -21,6 +20,7 @@ export class ChildTurnCompactionGateway {
 	#activeAdmissions = 0;
 	#admissionTail: Promise<void> = Promise.resolve();
 	#activeDeliveryId: string | undefined;
+	#preparingWorkingZone = false;
 	readonly #generationAbort = new AbortController();
 	readonly #cancelledDeliveryIds = new Set<string>();
 	readonly #nativeAdmissions = new Map<number, () => void>();
@@ -43,9 +43,13 @@ export class ChildTurnCompactionGateway {
 		event: SessionBeforeCompactEvent,
 	): { cancel: true } | undefined {
 		if (this.#disposed || event.reason !== "threshold") return undefined;
-		if (this.#activeAdmissions > 0 || this.#session.agent.hasQueuedMessages()) {
-			return undefined;
-		}
+		// A live Run signal means Pi is compacting between a tool result and the
+		// next response, which needs the room now rather than at the next turn.
+		if (
+			this.#session.agent.signal !== undefined ||
+			this.#activeAdmissions > 0 ||
+			this.#session.agent.hasQueuedMessages()
+		) return undefined;
 		return { cancel: true };
 	}
 
@@ -88,7 +92,9 @@ export class ChildTurnCompactionGateway {
 
 	cancelDelivery(deliveryId: string): void {
 		this.#cancelledDeliveryIds.add(deliveryId);
-		if (this.#activeDeliveryId === deliveryId && this.#session.isCompacting) {
+		// Only Working-Zone Preparation compacts for a Delivery; any other running
+		// compaction is Pi's own and may be why the Delivery is still waiting.
+		if (this.#activeDeliveryId === deliveryId && this.#preparingWorkingZone) {
 			this.#session.abortCompaction();
 		}
 	}
@@ -134,46 +140,36 @@ export class ChildTurnCompactionGateway {
 			unsubscribe = subscribeSession(this.#session, (event) => {
 				if (event.type === "compaction_end") finish(resolve);
 			});
+			// Pi's isCompacting also covers branch summaries, which emit no
+			// compaction_end but do wake idle waiters when they finish.
+			void this.#session.waitForIdle().then(() => finish(resolve));
 			this.#generationAbort.signal.addEventListener("abort", abort, { once: true });
 			if (!this.#session.isCompacting) finish(resolve);
 		});
 		this.#assertCurrentGeneration();
 	}
 
-	async prepareIdleCustomTurn(
-		workingZonePreparation?: WorkingZonePreparation,
-	): Promise<void> {
+	/**
+	 * Native threshold compaction is not checked here: Pi runs it when the admitted
+	 * custom turn starts, with this model's settings and its true trigger.
+	 */
+	async prepareWorkingZone(preparation: WorkingZonePreparation): Promise<void> {
 		this.#assertCurrentGeneration();
-		await this.waitForCompaction();
 		if (!this.#session.isIdle || !this.#session.autoCompactionEnabled) return;
 		const usage = this.#session.getContextUsage();
 		if (!usage || usage.tokens === null) return;
-		const settings = this.#session.settingsManager.getCompactionSettings();
-		if (!settings.enabled) return;
-		const nativeThresholdApplies = shouldCompact(
-			usage.tokens,
-			usage.contextWindow,
-			settings,
-		);
-
-		if (!workingZonePreparation) {
-			if (!nativeThresholdApplies) return;
-			await this.#compactAtNativeThreshold();
-			this.#assertCurrentGeneration();
-			return;
-		}
 
 		const incomingRequestTokens = estimateTokens({
 			role: "custom",
 			customType: MESSAGE_DELIVERY_CUSTOM_TYPE,
 			content: JSON.stringify({
-				messages: [workingZonePreparation.prospectiveRequest],
+				messages: [preparation.prospectiveRequest],
 			}),
 			display: true,
 			timestamp: 0,
 		});
 		const effectiveThreshold = workingZonePreparationThreshold({
-			...workingZonePreparation.intent,
+			...preparation.intent,
 			...(isRuntimeThinkingLevel(this.#session.thinkingLevel)
 				? { thinking: this.#session.thinkingLevel }
 				: {}),
@@ -185,14 +181,10 @@ export class ChildTurnCompactionGateway {
 		try {
 			await this.#compactForTurnPreparation(
 				workingZoneCompactionInstructions(
-					workingZonePreparation.prospectiveRequest.question,
+					preparation.prospectiveRequest.question,
 				),
 			);
 		} catch (error) {
-			if (nativeThresholdApplies) {
-				if (isNoCompactionWork(error)) return;
-				throw error;
-			}
 			this.#warn(
 				`Working-Zone Preparation failed; continuing Request Delivery: ${
 					error instanceof Error ? error.message : String(error)
@@ -202,24 +194,14 @@ export class ChildTurnCompactionGateway {
 		this.#assertCurrentGeneration();
 	}
 
-	async #compactAtNativeThreshold(): Promise<void> {
-		try {
-			await this.#compactForTurnPreparation();
-		} catch (error) {
-			// Existing custom-Delivery threshold preparation treats an
-			// unsummarizable branch as Pi having no native work to perform.
-			if (isNoCompactionWork(error)) return;
-			throw error;
-		}
-	}
-
-	async #compactForTurnPreparation(customInstructions?: string): Promise<void> {
+	async #compactForTurnPreparation(customInstructions: string): Promise<void> {
 		let aborted: boolean | undefined;
 		const unsubscribe = subscribeSession(this.#session, (event) => {
 			if (event.type === "compaction_end" && event.reason === "manual") {
 				aborted ??= event.aborted;
 			}
 		});
+		this.#preparingWorkingZone = true;
 		try {
 			await this.#session.compact(customInstructions);
 		} catch (error) {
@@ -229,6 +211,7 @@ export class ChildTurnCompactionGateway {
 			// outcome, not error text or extension-specific intent.
 			if (!aborted) throw error;
 		} finally {
+			this.#preparingWorkingZone = false;
 			unsubscribe();
 		}
 	}
@@ -289,12 +272,6 @@ export class ChildTurnCompactionGateway {
 			throw new Error("child_turn_compaction_gateway_disposed");
 		}
 	}
-}
-
-function isNoCompactionWork(error: unknown): boolean {
-	return error instanceof Error &&
-		(error.message === "Nothing to compact (session too small)" ||
-			error.message === "Already compacted");
 }
 
 function workingZoneCompactionInstructions(prospectiveQuestion: string): string {
