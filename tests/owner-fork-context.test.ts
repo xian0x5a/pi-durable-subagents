@@ -2,187 +2,79 @@ import "./support/supervised-run.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
-import { prepareBranchEntries, SessionManager, type SessionBeforeCompactEvent, type SessionBeforeTreeEvent } from "@earendil-works/pi-coding-agent";
-import { projectOwnerForkBranch, projectOwnerForkCompaction, projectParticipantHistoryContext } from "../src/pi-integration/owner-fork-context.ts";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { projectInheritedBoundary } from "../src/pi-integration/owner-fork-context.ts";
 import { transcriptFromSessionManager } from "../src/pi-integration/session-manager-transcript.ts";
 
-test("Owners without inherited model history receive no identity block or summary instructions", () => {
+test("Owners without inherited model history get no boundary", () => {
 	for (const prefix of ["none", "settings", "identity-only"] as const) {
-		const manager = SessionManager.inMemory();
+		const manager = forkedManager();
 		if (prefix === "settings") manager.appendCustomEntry("extension.settings", { enabled: true });
 		if (prefix === "identity-only") manager.appendCustomEntry("agent-coordination.identity", { agentId: "source-owner" });
 		appendOwnerIdentity(manager);
-		const leaf = manager.appendMessage({ role: "user", content: "Current work only", timestamp: 1 });
+		manager.appendMessage({ role: "user", content: "Current work only", timestamp: 1 });
 		const transcript = transcriptFromSessionManager(manager).inspect();
-		assert.deepEqual(projectParticipantHistoryContext({ transcript, messages: transcript.context.messages }), transcript.context.messages);
-		const preparation: SessionBeforeCompactEvent["preparation"] = {
-			messagesToSummarize: [...transcript.context.messages], turnPrefixMessages: [],
-			isSplitTurn: false, firstKeptEntryId: leaf, tokensBefore: 100,
-			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-			settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 1 },
-		};
-		const before = structuredClone(preparation);
-		projectOwnerForkCompaction(preparation, transcript);
-		assert.deepEqual(preparation, before);
-		const branch = { entriesToSummarize: [...transcript.entries], customInstructions: "Keep my focus", userWantsSummary: true } as SessionBeforeTreeEvent["preparation"];
-		assert.equal(projectOwnerForkBranch(branch, transcript), undefined);
-		assert.deepEqual(branch.entriesToSummarize, transcript.entries);
+		assert.deepEqual(projectInheritedBoundary(transcript.context.messages, transcript), transcript.context.messages);
 	}
 });
 
-test("inherited history stays attributed on a pre-Identity branch without an Owner identity block", () => {
-	const manager = SessionManager.inMemory();
-	manager.appendCustomEntry("agent-coordination.identity", { agentId: "source-owner" });
-	manager.appendMessage(fauxAssistantMessage([
-		{ type: "text", text: "Preserve the source explanation." },
-		fauxToolCall("bash", { command: "echo historical" }, { id: "old-call" }),
-	]));
-	manager.appendMessage({ role: "toolResult", toolCallId: "old-call", toolName: "bash", content: [{ type: "text", text: "historical result" }], isError: false, timestamp: 1 });
-	const oldLeaf = manager.appendCustomMessageEntry("agent-coordination.message-delivery", "Inherited Request: do source work", true);
-	appendOwnerIdentity(manager);
-	manager.branch(oldLeaf);
-	const before = JSON.stringify(manager.getEntries());
-	const transcript = transcriptFromSessionManager(manager).inspect();
-	const projected = projectParticipantHistoryContext({ transcript, messages: transcript.context.messages });
-	assert.doesNotMatch(JSON.stringify(projected), /Current Agent identity|agent-coordination.current-identity|Inherited source Agents/);
-	assert.equal(projected.filter(message => message.role === "toolResult").length, 0);
-	assert.equal(projected.filter(message => message.role === "assistant").length, 1);
-	const text = JSON.stringify(projected);
-	assert.match(text, /Preserve the source explanation/);
-	assert.match(text, /historical result/);
-	assert.match(text, /Inherited Request: do source work/);
-	assert.match(text, /source-owner/);
-	assert.equal(text.split("^ ").length - 1, 2);
-	assert.doesNotMatch(text, /! /);
-	assert.equal(JSON.stringify(manager.getEntries()), before);
-	assert.deepEqual(projectParticipantHistoryContext({ transcript, messages: projected }), projected);
-});
-
-test("new native calls appended beneath an inherited branch stay current across branch switches", () => {
-	const manager = SessionManager.inMemory();
-	manager.appendCustomEntry("agent-coordination.identity", { agentId: "source-owner" });
-	const oldLeaf = manager.appendMessage({ role: "user", content: "Source work", timestamp: 1 });
-	appendOwnerIdentity(manager);
-	manager.branch(oldLeaf);
-	const current = { ...fauxAssistantMessage(fauxToolCall("agent_message", { operation: "request", targetAgent: "peer", title: "Current work", question: "Do current work" }, { id: "new-call" })), timestamp: 2 };
-	const currentLeaf = manager.appendMessage(current);
-	for (const leaf of [currentLeaf, oldLeaf, currentLeaf]) {
-		manager.branch(leaf);
-		const transcript = transcriptFromSessionManager(manager).inspect();
-		const projected = projectParticipantHistoryContext({ transcript, messages: transcript.context.messages });
-		assert.doesNotMatch(JSON.stringify(projected), /Current Agent identity|agent-coordination.current-identity/);
-		assert.doesNotMatch(JSON.stringify(projected), /\^ /);
-		if (leaf === currentLeaf) assert.deepEqual(projected.at(-1), current);
-	}
-});
-
-test("inherited summaries and orphan results retained after compaction remain attributed history", () => {
-	const manager = SessionManager.inMemory();
-	manager.appendCustomEntry("agent-coordination.identity", { agentId: "source-owner" });
-	const call = manager.appendMessage(fauxAssistantMessage(fauxToolCall("read", { path: "source-file" }, { id: "compacted-call" })));
-	const receipt = manager.appendMessage({ role: "toolResult", toolCallId: "compacted-call", toolName: "read", content: [{ type: "text", text: "Retained source result" }], isError: false, timestamp: 2 });
-	manager.appendCompaction("Source summary: finish source duties", receipt, 100);
-	appendOwnerIdentity(manager);
-	const transcript = transcriptFromSessionManager(manager).inspect();
-	assert.equal(transcript.context.messages.some(message => message.role === "assistant"), false);
-	const projected = projectParticipantHistoryContext({ transcript, messages: transcript.context.messages });
-	assert.equal(projected.some(message => message.role === "toolResult" || message.role === "compactionSummary"), false);
-	assert.match(JSON.stringify(projected), /Retained source result/);
-	assert.match(JSON.stringify(projected), /Source summary: finish source duties/);
-	assert.equal(JSON.stringify(projected).split("^ ").length - 1, 2);
-	assert.ok(call);
-});
-
-test("multiple inherited identities retain per-source attribution without trusting copied identities", () => {
-	const manager = SessionManager.inMemory();
-	for (const source of ["original-owner", "intermediate-owner"]) {
-		manager.appendCustomEntry("agent-coordination.identity", { agentId: source });
-		manager.appendCustomMessageEntry("agent-coordination.workflow-continuation", `Continue ${source} work`, true);
-	}
-	appendOwnerIdentity(manager);
-	const transcript = transcriptFromSessionManager(manager).inspect();
-	const projected = projectParticipantHistoryContext({ transcript, messages: transcript.context.messages });
-	assert.match(JSON.stringify(projected[0]), /"agentId":"original-owner"/);
-	assert.match(JSON.stringify(projected[1]), /"agentId":"intermediate-owner"/);
-	assert.doesNotMatch(JSON.stringify(projected), /Current Agent identity|agent-coordination.current-identity/);
-});
-
-test("without a canonical current Owner Identity projection does not invent Owner authority", () => {
-	const manager = SessionManager.inMemory();
+test("without a canonical current Owner Identity no history counts as inherited", () => {
+	const manager = forkedManager();
 	manager.appendCustomEntry("agent-coordination.identity", { agentId: "copied-owner" });
 	manager.appendMessage({ role: "user", content: "No current identity", timestamp: 1 });
 	const transcript = transcriptFromSessionManager(manager).inspect();
-	assert.deepEqual(projectParticipantHistoryContext({ transcript, messages: transcript.context.messages }), transcript.context.messages);
+	assert.deepEqual(projectInheritedBoundary(transcript.context.messages, transcript), transcript.context.messages);
 });
 
-test("native history before any source Identity stays explicitly unattributed", () => {
-	const manager = SessionManager.inMemory();
+test("native history from before any source Identity counts as inherited", () => {
+	const manager = forkedManager();
 	manager.appendMessage(fauxAssistantMessage(fauxToolCall("read", { path: "pre-bootstrap-file" }, { id: "pre-bootstrap-call" })));
 	manager.appendCustomEntry("agent-coordination.identity", { agentId: "later-source-owner" });
 	appendOwnerIdentity(manager);
 	const transcript = transcriptFromSessionManager(manager).inspect();
-	const projected = projectParticipantHistoryContext({ transcript, messages: transcript.context.messages });
-	const marked = projected.find(message => message.role === "custom" && message.customType === "agent-coordination.context-only");
-	assert.ok(marked?.role === "custom" && Array.isArray(marked.content));
-	const text = marked.content.find(part => part.type === "text");
-	assert.ok(text?.type === "text");
-	assert.match(JSON.parse(text.text.slice(2)).source.agentId, /unknown/);
+	const projected = projectInheritedBoundary(transcript.context.messages, transcript);
+	assert.deepEqual(projected.slice(0, -1), transcript.context.messages);
+	assert.match(JSON.stringify(projected.at(-1)), /Inherited history boundary:/);
 });
 
-test("compaction annotates inherited previous summaries and split-turn input without modifying durable entries", () => {
-	const manager = SessionManager.inMemory();
-	manager.appendCustomEntry("agent-coordination.identity", { agentId: "source-owner" });
-	const leaf = manager.appendMessage({ role: "user", content: "Source task", timestamp: 1 });
-	manager.appendCompaction("Old source duties", leaf, 100);
+test("an inherited system message alone is not inherited history", () => {
+	const manager = forkedManager();
+	const system = manager.appendMessage({ role: "system", content: "Inherited prompt", timestamp: 1 });
+	manager.appendMessage({ role: "user", content: "Inherited work", timestamp: 2 });
 	appendOwnerIdentity(manager);
+	manager.branch(system);
+	manager.appendMessage({ role: "user", content: "Bare branch work", timestamp: 3 });
 	const transcript = transcriptFromSessionManager(manager).inspect();
-	const before = JSON.stringify(transcript.entries);
-	const preparation: SessionBeforeCompactEvent["preparation"] = {
-		messagesToSummarize: [], turnPrefixMessages: [{ role: "user", content: "Retained source text", timestamp: 2 }],
-		isSplitTurn: true, firstKeptEntryId: leaf, tokensBefore: 100, previousSummary: "Old source duties",
-		fileOps: { read: new Set(), written: new Set(), edited: new Set() },
-		settings: { enabled: true, reserveTokens: 100, keepRecentTokens: 1 },
-	};
-	projectOwnerForkCompaction(preparation, transcript);
-	assert.doesNotMatch(JSON.stringify(preparation), /Current Agent identity|agent-coordination.current-identity/);
-	assert.match(JSON.stringify(preparation.messagesToSummarize), /not current responsibilities/);
-	assert.match(JSON.stringify(preparation.turnPrefixMessages), /not current responsibilities/);
-	assert.match(preparation.previousSummary!, /^\^ /);
-	assert.match(preparation.previousSummary!, /Old source duties/);
-	assert.equal(preparation.firstKeptEntryId, leaf);
-	assert.equal(preparation.tokensBefore, 100);
-	assert.equal(JSON.stringify(transcript.entries), before);
-	const projected = structuredClone(preparation);
-	projectOwnerForkCompaction(preparation, transcript);
-	assert.deepEqual(preparation, projected, "repeated preparation must not accumulate guidance");
+	assert.equal(transcript.context.messages[0]?.role, "system");
+	assert.deepEqual(projectInheritedBoundary(transcript.context.messages, transcript), transcript.context.messages);
 });
 
-test("branch annotation preserves native file tracking, summaries, and user summary instructions", () => {
-	const manager = SessionManager.inMemory();
-	manager.appendCustomEntry("agent-coordination.identity", { agentId: "source-owner" });
-	const leaf = manager.appendMessage(fauxAssistantMessage([
-		{ type: "thinking", thinking: "Source reasoning", thinkingSignature: "signed" },
-		fauxToolCall("read", { path: "source.txt" }, { id: "source-read" }),
-	]));
-	manager.appendCustomMessageEntry("agent-coordination.message-delivery", "Source Delivery", true);
-	manager.appendCompaction("Source summary", leaf, 100);
-	appendOwnerIdentity(manager);
-	const transcript = transcriptFromSessionManager(manager).inspect();
-	const original = JSON.stringify(transcript.entries);
-	const preparation = {
-		entriesToSummarize: [...transcript.entries], customInstructions: "Preserve my chosen summary focus", userWantsSummary: true,
-	} as SessionBeforeTreeEvent["preparation"];
-	const instructions = projectOwnerForkBranch(preparation, transcript);
-	assert.match(instructions!, /Preserve my chosen summary focus/);
-	assert.doesNotMatch(instructions!, /Current Agent identity|Inherited source Agents/);
-	assert.match(instructions!, /not current responsibilities/);
-	const native = prepareBranchEntries(preparation.entriesToSummarize);
-	assert.deepEqual([...native.fileOps.read], ["source.txt"]);
-	assert.match(JSON.stringify(native.messages), /\^ .*source-read/);
-	assert.match(JSON.stringify(native.messages), /\^ .*Source Delivery/);
-	assert.match(JSON.stringify(native.messages), /\^ .*Source summary/);
-	assert.equal(JSON.stringify(transcript.entries), original);
+test("only a forked session with a canonical Owner Identity turns earlier model entries into inherited history", () => {
+	const owner = (sessionId: string) => ({ workflowId: sessionId, directSpawnerAgentId: null });
+	const cases: Array<[string, () => SessionManager, (sessionId: string) => Record<string, unknown>, boolean]> = [
+		["forked Owner", forkedManager, owner, true],
+		["child", forkedManager, sessionId => ({ workflowId: sessionId, directSpawnerAgentId: "parent-agent" }), false],
+		["Moderator", forkedManager, sessionId => ({ workflowId: sessionId, directSpawnerAgentId: null, spawnSource: { kind: "moderator" } }), false],
+		["foreign Workflow", forkedManager, () => ({ workflowId: "other-workflow", directSpawnerAgentId: null }), false],
+		["history before the Identity but no parent session", () => SessionManager.inMemory(), owner, false],
+	];
+	for (const [name, createManager, identity, expectsBoundary] of cases) {
+		const manager = createManager();
+		manager.appendMessage({ role: "user", content: "Looks inherited", timestamp: 1 });
+		manager.appendCustomEntry("agent-coordination.identity", { agentId: manager.getSessionId(), ...identity(manager.getSessionId()) });
+		manager.appendMessage({ role: "user", content: "Own work", timestamp: 2 });
+		const transcript = transcriptFromSessionManager(manager).inspect();
+		const projected = projectInheritedBoundary(transcript.context.messages, transcript);
+		assert.equal(/Inherited history boundary:/.test(JSON.stringify(projected)), expectsBoundary, name);
+	}
 });
+
+/** Pi records a fork through its header's parent session, which is what makes history inherited. */
+function forkedManager(): SessionManager {
+	const manager = SessionManager.inMemory();
+	manager.newSession({ parentSession: "/source.jsonl" });
+	return manager;
+}
 
 function appendOwnerIdentity(manager: SessionManager): void {
 	manager.appendCustomEntry("agent-coordination.identity", {

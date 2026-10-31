@@ -1,5 +1,5 @@
 ---
-status: open
+status: done
 ---
 
 ## Goal
@@ -51,19 +51,30 @@ Run scoped files through `npm run test:fast -- --file=...`, then affected proces
 
 Inside a summary the model cannot separate inherited from current work.
 
+A parent request carrying a `!` record or a Request presentation splits the shared prefix at that point.
+
 ## Progress
 
 - Worktree `.worktrees/owner-fork-boundary`, branch `feat/owner-fork-tail-boundary`, stacked on `fix/compaction-admission`.
+- Done: boundary in place, `^` and fork provenance capture removed, compaction and tree hooks removed, docs updated.
+- Done: two independent reviews; each finding fixed test-first or recorded in Decisions.
 
 ## Decisions
 
 - Transient, never persisted: a saved boundary would stay behind on an abandoned branch.
-- Compute it after `!` projection: `mapVisibleMessages` already handles projected lists, so `projectCoordinationHistory` needs no boundary parameter.
+- Compute it after `!` projection: `mapVisibleMessages` already handles projected lists, by key rather than by position, so `projectCoordinationHistory` needs no boundary parameter.
+- Insert it in `context_with_system`, not `context`: any changed `context` result makes Pi merge the system messages, which breaks the prefix on models with mid-conversation system messages.
+- Require `header.parentSession`: entries before the Identity alone also describe an extension's startup message and a native session adopted later. Pi sets no parent on unsaved sessions, so their forks lose only the orientation message.
+- Accept pi-codex-conversion's lenient replay cost: this repo cannot fix it, and dropping the boundary after compaction would leave a summary of inherited work unmarked.
 - Rejected: summary handoff, stripping tool calls, keeping `^` (scored 3.10, 2.50, 2.25 against 4.65).
 
 ## Surprises & Discoveries
 
-- PCC's strict replay match fails with a message after the summary, but its lenient path places the checkpoint and keeps what follows.
+- PCC's strict replay match fails with a message after the summary, but its lenient path places the checkpoint and keeps what follows. That includes kept messages its window already covers, so they repeat on each request until the next compaction. Reproduced against PCC's real rewrite.
+- A changed `context` result still merges system messages when a request carries a `!` mark or a Request presentation. An unforked Owner has the same cost, so it is left alone.
+- `followsContextPrefix` was false for every production request, because extensions see no system messages and the session context keeps them. Duplicates fell through to the all-branch index.
 - `^` converted inherited summaries to `custom`, which hid inherited native checkpoints from PCC's replay. Removing it fixes that.
 
 ## Outcomes & Retrospective
+
+A fork now sends inherited history unchanged, followed by one derived boundary message, and no compaction strategy has to carry marks. `npm run test:fast` passes, as do the affected process and conformance files; `coordinated-workflow-pty` timed out once while other work loaded the machine and passed on both reruns. PCC's replay was exercised through its real rewrite function, not a full PCC session. The first design missed that a changed `context` result merges system messages, and that entries before the Identity do not prove a fork; both came from independent review.

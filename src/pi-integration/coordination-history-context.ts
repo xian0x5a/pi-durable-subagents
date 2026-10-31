@@ -3,10 +3,10 @@ import type { ImageContent, ThinkingContent, ToolCall } from "@earendil-works/pi
 import type { TranscriptInspection } from "../transcript/agent-transcript.ts";
 import { bootstrapAgent, indexedState } from "../transcript/retained-transcript.ts";
 import { sessionEntryToContextMessages } from "@earendil-works/pi-coding-agent";
-import type { ContextOnlyReason } from "../protocol/replay-rejection.ts";
+import type { CoordinationRejection } from "../protocol/replay-rejection.ts";
 
 export type CoordinationHistoryMark = Readonly<{
-	reason: ContextOnlyReason;
+	reason: CoordinationRejection["reason"];
 	record: Readonly<{
 		agentId: string;
 		entryId: string;
@@ -16,7 +16,7 @@ export type CoordinationHistoryMark = Readonly<{
 	diagnostic: string;
 }>;
 
-const HISTORY_MARKS: Record<ContextOnlyReason, string> = { invalid: "!", inherited: "^" };
+const CORRUPTED_RECORD_MARK = "!";
 const CONTEXT_ONLY_CUSTOM_TYPE = "agent-coordination.context-only";
 
 type CallResultGroup = {
@@ -105,7 +105,7 @@ export function projectCoordinationHistory(options: {
 			addMark(callMarks, occurrence, mark);
 			addMark(callFallbackMarks, callKey(entry.message.timestamp, call), mark);
 			// A compacted context can retain the result but omit its rejected call.
-			// Match its physical result, not every inherited call sharing a native ID.
+			// Match its physical result, not every call sharing a native ID.
 			if (visibleCallOccurrences.has(occurrence) || !visibleResultIds.has(call.id)) continue;
 			const position = state.positions.get(entry.id)!;
 			for (let index = position + 1; index < state.entries.length; index++) {
@@ -155,7 +155,7 @@ export function projectCoordinationHistory(options: {
 			const entryId = physical?.entryId;
 			const key = entryId ?? messageKey(message);
 			const pending = pendingGroups.get(message.toolCallId);
-			// A retained orphan result must not attach to a different inherited call
+			// A retained orphan result must not attach to a different call
 			// just because both happen to use the same native tool-call ID.
 			const owner = entryId === undefined ? undefined : resultOwners.get(entryId);
 			const compatible = entryId === undefined || !resultOwners.has(entryId) || pending?.callKey === owner;
@@ -206,6 +206,12 @@ export function projectCoordinationHistory(options: {
 	});
 }
 
+/** The session entry behind each context message, where it still has one. */
+export function visibleMessageEntryIds(messages: readonly AgentMessage[], transcript: TranscriptInspection): ReadonlyArray<string | undefined> {
+	return mapVisibleMessages(messages, physicalMessagesFor(transcript), contextPhysicalMessagesFor(transcript), transcript.context.messages)
+		.map(visible => visible.physical?.entryId);
+}
+
 function addMark(index: Map<string, CoordinationHistoryMark[]>, key: string, mark: CoordinationHistoryMark): void {
 	const marks = index.get(key) ?? [];
 	marks.push(mark);
@@ -245,18 +251,18 @@ function mapVisibleMessages(
 		candidates.push(candidate);
 		contextByKey.set(messageKey(candidate.message), candidates);
 	}
-	// A caller may defensively clone the native context. In that case object
-	// identity is unavailable, but the context's compaction boundary still tells
-	// us which physical duplicate is visible. Preparation arrays retain native
-	// message references and therefore continue to use the all-entry index.
-	const contextPrefixLength = Math.min(messages.length, contextMessages.length);
+	// Pi clones the context for extensions, so object identity is unavailable, but
+	// the context's compaction boundary still tells us which physical duplicate is
+	// visible. Extensions see no system messages, which the session context keeps.
+	const contextConversation = contextMessages.filter(message => message.role !== "system");
+	const contextPrefixLength = Math.min(messages.length, contextConversation.length);
 	const followsContextPrefix = messages.slice(0, contextPrefixLength).every((message, index) =>
-		messageKey(message) === messageKey(contextMessages[index]!));
-	// A previous pass may have replaced inherited native groups with one
+		messageKey(message) === messageKey(contextConversation[index]!));
+	// A previous pass may have replaced native groups with one
 	// informational custom message. Its records identify the physical entries
 	// represented by that replacement; reserve those occurrences before mapping
 	// the remaining (possibly cloned) native messages. Without this, an exact
-	// current duplicate is mapped back to the already projected inherited one.
+	// duplicate is mapped back to the already projected one.
 	const used = reservedProjectedMessages(messages, physical);
 	let cursor = -1;
 	return messages.map((message, index) => {
@@ -360,7 +366,7 @@ function informationMessage(marks: readonly CoordinationHistoryMark[], call: Too
 			images.push(part);
 			return { type: "image", mimeType: part.mimeType, attachment: images.length };
 		}) }));
-	const text = `${HISTORY_MARKS[first.reason]} ${JSON.stringify({
+	const text = `${CORRUPTED_RECORD_MARK} ${JSON.stringify({
 		source: { agentId: source.agentId, entryId: source.entryId, toolCallId: source.toolCallId },
 		call, assistantContext, results: preservedResults, diagnostics: [...new Set(marks.map(mark => mark.diagnostic))],
 	})}`;

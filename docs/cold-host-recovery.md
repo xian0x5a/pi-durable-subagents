@@ -23,9 +23,8 @@ replay skips them without quarantining the Agent or failing Workflow admission.
 The same rule covers every physical branch and survives compaction and reload.
 Original evidence and structured validation diagnostics remain available; model
 context presents rejected call/result groups once with `!`, without native orphan
-tool results or a new model turn. `^` is reserved for inherited material, not an
-alias for invalid. Identity, membership, role, and contradictions between otherwise
-valid canonical records remain strict. See the
+tool results or a new model turn. Identity, membership, role, and contradictions
+between otherwise valid canonical records remain strict. See the
 [rejection contract](coordination-replay-rejection-design.md).
 
 ## Dormant Agents and `/agents`

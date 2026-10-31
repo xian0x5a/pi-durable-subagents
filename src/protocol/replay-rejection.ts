@@ -25,7 +25,6 @@ import { findAuthoredAgentMessageSources } from "./request-resolution.ts";
 import { validateRunControlInput, validateSupervisoryResumeResultShape } from "./run-control.ts";
 import { validateRunFailureRecoveryRecord } from "./run-failure-recovery.ts";
 
-export type ContextOnlyReason = "invalid" | "inherited";
 export type CoordinationRejection = Readonly<{
 	reason: "invalid";
 	source: Readonly<{ agentId: string; entryId: string; toolCallId?: string }>;

@@ -11,7 +11,7 @@ The immutable transcript bootstrap facts for one Agent, bound to its expected Pi
 The canonical interpretation of ordinary Identity evidence using the live Pi session for both Owner identity IDs and current Owner metadata. Malformed or copied ordinary Identity evidence is historical during recovery, and one current-scope Owner bootstrap may be appended when needed; a structurally valid child Identity for the current session remains a child. A distinct Moderator Input remains a separate role bootstrap.
 
 **Owner Fork**:
-A native Pi fork or clone of a Workflow Owner into a fresh independent Workflow. Its fresh Owner Identity is the protocol-evidence cutoff: copied earlier coordination remains model context but grants no Message, Request, authority, or child relationship in the new Workflow. Forking a child Agent or Moderator is not admitted.
+A native Pi fork or clone of a Workflow Owner into a fresh independent Workflow. Its fresh Owner Identity is the protocol-evidence cutoff: copied earlier coordination remains unchanged model context, followed by one transient boundary message, but grants no Message, Request, authority, or child relationship in the new Workflow. Forking a child Agent or Moderator is not admitted.
 
 **Owner Admission**:
 The one-time attempt, per Owner extension attachment, to bind its Pi session to a verified Workflow as the Workflow Owner. It is Pending until it settles as Admitted (coordination available), Blocked (coordination disabled, failure evidence retained, and native fork allowed only if Owner role identification completed first), or Inactive (the host bound no Runtime, so no Owner exists); model turns wait until it settles.
