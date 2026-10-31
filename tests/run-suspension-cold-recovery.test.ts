@@ -73,8 +73,9 @@ test("host loss drops a Run stop: the Agent recovers dormant and resumes as ordi
 		await new Promise(resolve => setTimeout(resolve, 30));
 	}
 	const childEntries = () => JSON.stringify(SessionManager.open(originalStatus.primaryEvidence.transcriptPath!).getEntries());
+	// The re-attempt runs in the child process, so its stop reaches the Owner later.
+	await until(() => view.status(agentId).run.suspension?.evidence.error === PROVIDER_FAILURE, "a re-attempt on the failing provider stops again");
 	assert.equal(childEntries().includes("PRESERVED_QUEUE"), true, "explicit recovery re-admits the captured Message");
-	assert.equal(view.status(agentId).run.suspension?.evidence.error, PROVIDER_FAILURE, "a re-attempt on the failing provider stops again");
 	assert.equal(childEntries().includes("UNEXPECTED_AUTOMATIC_WAKE"), false, "recovery itself never generates");
 	// A human message in the resumed Agent's editor is the deliberate retry.
 	broker.setResponses([
@@ -87,7 +88,8 @@ test("host loss drops a Run stop: the Agent recovers dormant and resumes as ordi
 	await until(() => Boolean(view.status(agentId).primaryEvidence.transcriptPath) && JSON.stringify(
 		SessionManager.open(view.status(agentId).primaryEvidence.transcriptPath!).getEntries(),
 	).includes("Continue the original work after my account change."));
-	assert.equal(view.status(agentId).run.suspension, undefined);
+	// The child writes the message before the Owner commits the resumption that clears the stop.
+	await until(() => view.status(agentId).run.suspension === undefined, "the deliberate retry clears the stop");
 	await until(() => childEntries().includes("QUEUED_STEER_COMPLETED"), "the re-admitted queued work continues in its own turn");
 	// The Answer Obligation is deliberately still outstanding, so the recovered Run stays
 	// retained until explicit abort ends it before teardown.

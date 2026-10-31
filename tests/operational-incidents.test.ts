@@ -4111,18 +4111,21 @@ test("a starting Moderator keeps no requester progressing for Owner parking", { 
 	// The first Moderator, the one the child asks.
 	const moderatorRecord = () => [...records.values()].find(({ identity }) => isModeratorIdentity(identity));
 	const CHECK_IN = "Moderator check-in: what blocks you?";
-	// The Moderator first runs long after the spawn below returns.
-	let childAgentId = "";
+	// The Moderator can run before the spawn below returns, and it checks in only once.
+	let announceChildAgentId!: (agentId: string) => void;
+	const childAgentId = new Promise<string>((resolve) => {
+		announceChildAgentId = resolve;
+	});
 	// Only the first Moderator checks in; the child's Request to it clears and
 	// re-raises the Stall, and a later Moderator must not restart that cycle.
 	let checkedIn = false;
 	// Responses route by caller, because the child and its Moderator share one model.
-	const route = (context: Context) => {
+	const route = async (context: Context) => {
 		const transcript = JSON.stringify(context.messages);
 		if (getCurrentTools(context.messages).some(({ name }) => name === "moderator_control")) {
 			if (checkedIn) return fauxAssistantMessage("Investigating the affected Agent.");
 			checkedIn = true;
-			return fauxAssistantMessage(fauxToolCall("agent_message", { operation: "send", targetAgent: childAgentId, content: CHECK_IN },
+			return fauxAssistantMessage(fauxToolCall("agent_message", { operation: "send", targetAgent: await childAgentId, content: CHECK_IN },
 					{ id: "moderator-check-in" }), { stopReason: "toolUse" });
 		}
 		return transcript.includes(CHECK_IN) && !transcript.includes("child-asks-moderator")
@@ -4134,7 +4137,7 @@ test("a starting Moderator keeps no requester progressing for Owner parking", { 
 	};
 	host.model.setResponses(Array.from({ length: 200 }, () => route));
 	const child = await spawnFromView(host.session, owner, "moderator-requester-parent", "Settle without Answer.");
-	childAgentId = child.agentId;
+	announceChildAgentId(child.agentId);
 	await waitForCondition(() => {
 		const moderator = moderatorRecord();
 		const run = owner.status(child.agentId).run;
