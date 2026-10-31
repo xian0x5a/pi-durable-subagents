@@ -10,7 +10,8 @@ import xtermHeadless from "@xterm/headless";
 import { escapeTerminalControls } from "./support/terminal-safe-text.ts";
 
 const SCRIPT = "/usr/bin/script";
-const PTY_WAIT_TIMEOUT_MS = 5_000;
+// Setup starts a real child Agent, which alone can take seconds on a busy machine.
+const PTY_WAIT_TIMEOUT_MS = 20_000;
 const BANNER_ABSENCE_POLL_ATTEMPTS = 20;
 const BANNER_ABSENCE_POLL_INTERVAL_MS = 25;
 const FIXTURE = fileURLToPath(
@@ -49,6 +50,9 @@ test("a child's session_start notify never appears in the Owner's PTY transcript
 			);
 		}
 		await terminal.waitFor("__PTY_DONE__");
+		// Let the fixture exit by itself. A SIGTERM at this point holds `script` open
+		// for two seconds, which outlasts the leak check's grace.
+		await terminal.closed();
 	} finally {
 		terminal.kill();
 	}
@@ -70,6 +74,7 @@ function launchFixture() {
 class PtyFixture {
 	readonly #child: ChildProcessWithoutNullStreams;
 	#output = "";
+	readonly #closed: Promise<void>;
 
 	constructor(child: ChildProcessWithoutNullStreams) {
 		this.#child = child;
@@ -79,6 +84,20 @@ class PtyFixture {
 		child.stderr.on("data", (chunk) => {
 			this.#output += chunk.toString();
 		});
+		this.#closed = new Promise<void>((resolve, reject) => {
+			child.once("error", reject);
+			child.once("close", (code, signal) => {
+				if (code === 0) resolve();
+				else reject(new Error(
+					`PTY fixture exited with ${code ?? signal ?? "unknown status"}\n${escapeTerminalControls(this.#output)}`,
+				));
+			});
+		});
+		void this.#closed.catch(() => undefined);
+	}
+
+	closed(): Promise<void> {
+		return this.#closed;
 	}
 
 	async screen(): Promise<string[]> {
