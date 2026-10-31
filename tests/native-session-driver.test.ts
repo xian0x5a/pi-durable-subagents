@@ -1,8 +1,9 @@
 import "./support/supervised-run.ts";
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 
 import {
 	NativeSessionDriver,
@@ -422,22 +423,153 @@ test("idle custom commit fails when the transcript lacks the exact Delivery", { 
 	await assert.rejects(host.driver.commitIdleCustom(customMessage("enriched")), /idle_custom_commit_missing/);
 });
 
-test("compaction follows Pi's edges, not its controller flag that outlives threshold compaction", { timeout: 5000 }, async t => {
+test("threshold compaction reports Pi's start and end edges", { timeout: 5000 }, async t => {
 	// A reserve near the faux model's whole context window puts every Run past Pi's threshold.
 	const host = await fixture(t, undefined, {
 		settings: { compaction: { enabled: true, reserveTokens: 16_000, keepRecentTokens: 1 } },
 	});
 	host.model.setResponses([fauxAssistantMessage("Turn fills the context."), fauxAssistantMessage("Compaction summary.")]);
-	const edges: Array<Readonly<{ compacting: boolean; driver: boolean; nativeFlag: boolean }>> = [];
+	const edges: Array<Readonly<{ compacting: boolean; driver: boolean }>> = [];
 	host.driver.subscribe(event => {
 		if (event.type === "compaction_changed") {
-			edges.push({ compacting: event.compacting, driver: host.driver.isCompacting(), nativeFlag: host.session.isCompacting });
+			edges.push({ compacting: event.compacting, driver: host.driver.isCompacting() });
 		}
 	});
 	await host.session.prompt("Fill the context.");
 	await host.driver.waitForIdle();
 	assert.deepEqual(edges, [
-		{ compacting: true, driver: true, nativeFlag: true },
-		{ compacting: false, driver: false, nativeFlag: true },
+		{ compacting: true, driver: true },
+		{ compacting: false, driver: false },
 	]);
+});
+
+/** Lets a test skip Pi's summarizer: the extension supplies the compaction result. */
+const instantCompaction: ExtensionFactory = pi => {
+	pi.on("session_before_compact", event => ({ compaction: {
+		summary: "Instant compaction summary.",
+		firstKeptEntryId: event.preparation.firstKeptEntryId,
+		tokensBefore: event.preparation.tokensBefore,
+	} }));
+};
+
+function compactionEdges(events: readonly NativeSessionEvent[]): boolean[] {
+	return events.flatMap(event => event.type === "compaction_changed" ? [event.compacting] : []);
+}
+
+// Contract guard: a later hold on the finished edge must release when the input
+// that held it starts no Run.
+test("input handled inside compaction_end does not leave compaction reported", { timeout: 5000 }, async t => {
+	const queuedInput = "Queued input an extension handles.";
+	const host = await fixture(t, pi => {
+		instantCompaction(pi);
+		pi.on("input", event => event.text === queuedInput ? { action: "handled" } : undefined);
+	}, { settings: { compaction: { enabled: true, reserveTokens: 16, keepRecentTokens: 1 } } });
+	host.model.setResponses([fauxAssistantMessage("First response."), fauxAssistantMessage("Second response.")]);
+	await host.session.prompt("First turn.");
+	await host.session.prompt("Second turn.");
+	await host.driver.waitForIdle();
+
+	let queued: Promise<void> | undefined;
+	const unsubscribe = host.session.subscribe(event => {
+		// Interactive mode flushes its compaction queue from this event.
+		if (event.type === "compaction_end") queued = host.session.prompt(queuedInput);
+	});
+	t.after(unsubscribe);
+	await host.session.compact();
+	await queued;
+	await new Promise<void>(resolve => setImmediate(resolve));
+
+	assert.equal(host.driver.isCompacting(), false);
+	assert.deepEqual(compactionEdges(host.events), [true, false]);
+	assert.equal(host.events.filter(event => event.type === "run_started").length, 2, "the handled input started no Run");
+});
+
+// Contract guard: a hold left by an earlier compaction_end must not report finished
+// while a later compaction is still running.
+test("compaction started during a held completion is not reported finished early", { timeout: 5000 }, async t => {
+	const queuedInput = "Queued input held in the input phase.";
+	const inputGate = deferred();
+	const secondCompactionGate = deferred();
+	t.after(() => { inputGate.resolve(); secondCompactionGate.resolve(); });
+	let compactions = 0;
+	const host = await fixture(t, pi => {
+		pi.on("session_before_compact", async event => {
+			// Only the second compaction is slow, so it outlives the first one's hold.
+			if (++compactions === 2) await secondCompactionGate.promise;
+			return { compaction: {
+				summary: "Instant compaction summary.",
+				firstKeptEntryId: event.preparation.firstKeptEntryId,
+				tokensBefore: event.preparation.tokensBefore,
+			} };
+		});
+		pi.on("input", async event => {
+			if (event.text !== queuedInput) return undefined;
+			await inputGate.promise;
+			return { action: "handled" };
+		});
+	}, { settings: { compaction: { enabled: true, reserveTokens: 16, keepRecentTokens: 1 } } });
+	host.model.setResponses([
+		fauxAssistantMessage("First response."), fauxAssistantMessage("Second response."),
+		fauxAssistantMessage("Third response."), fauxAssistantMessage("Fourth response."),
+	]);
+	for (const turn of ["First turn.", "Second turn."]) await host.session.prompt(turn);
+	await host.driver.waitForIdle();
+
+	let queued: Promise<void> | undefined;
+	const unsubscribe = host.session.subscribe(event => {
+		// Interactive mode flushes its compaction queue from this event.
+		if (event.type === "compaction_end" && queued === undefined) queued = host.session.prompt(queuedInput);
+	});
+	t.after(unsubscribe);
+	await host.session.compact();
+	assert.ok(queued, "the first compaction handed input to the session");
+	// The first completion is now held on the gated input. Seed history without a Run
+	// (a Run would release the hold) so Pi accepts a second compaction.
+	for (const text of ["Seed one.", "Seed two."]) {
+		commitUnrelatedUserMessage(host, text);
+		host.session.sessionManager.appendMessage(fauxAssistantMessage("Seed reply."));
+	}
+	const second = host.session.compact();
+	await new Promise<void>(resolve => setImmediate(resolve));
+	inputGate.resolve();
+	await queued;
+	await new Promise<void>(resolve => setImmediate(resolve));
+
+	assert.equal(host.driver.isCompacting(), true, "the second compaction is still running");
+	assert.equal(compactionEdges(host.events).includes(false), false, "no finished edge while it runs");
+
+	secondCompactionGate.resolve();
+	await second;
+	await new Promise<void>(resolve => setImmediate(resolve));
+	assert.equal(host.driver.isCompacting(), false);
+	assert.equal(compactionEdges(host.events).at(-1), false);
+	assert.equal(compactionEdges(host.events).filter(compacting => !compacting).length, 1);
+});
+
+// Contract guard: mid-Run compaction has no later agent_start to wait for, so its
+// finished edge must arrive before the next response.
+test("compaction inside a Run reports finished before the next response", { timeout: 5000 }, async t => {
+	const host = await fixture(t, pi => {
+		instantCompaction(pi);
+		pi.registerTool({
+			name: "read_large", label: "Read large", description: "Read a large result.",
+			parameters: Type.Object({}),
+			async execute() { return { content: [{ type: "text", text: "R".repeat(40_000) }], details: {} }; },
+		});
+	}, { settings: { compaction: { enabled: true, reserveTokens: 8_000, keepRecentTokens: 1 } } });
+	let edgesAtNextResponse: boolean[] | undefined;
+	host.model.setResponses([
+		fauxAssistantMessage(fauxToolCall("read_large", {}, { id: "large-read" }), { stopReason: "toolUse" }),
+		() => {
+			edgesAtNextResponse = compactionEdges(host.events);
+			return fauxAssistantMessage("Continued after compaction.");
+		},
+	]);
+
+	await host.session.prompt("Read the large result.");
+	await host.driver.waitForIdle();
+
+	assert.deepEqual(edgesAtNextResponse, [true, false]);
+	assert.equal(host.driver.isCompacting(), false);
+	assert.equal(host.events.filter(event => event.type === "run_started").length, 1);
 });

@@ -1045,6 +1045,117 @@ test("detached Dormant compaction retains its Runtime until queued input starts 
 	);
 });
 
+test("input queued during Dormant compaction survives a slow start of its successor Run", async (t) => {
+	const queuedInput = "Continue after slowly started Dormant compaction.";
+	const completedResponse = "Queued input survived a slow post-compaction start.";
+	const probe = configureProcessAgentViewProbe(t, "compaction-retention-slow-start");
+	const root = await mkdtemp(join(tmpdir(), "pi-agent-compaction-slow-start-"));
+	const agentDir = join(root, "agent");
+	await mkdir(agentDir, { recursive: true });
+	await writeFile(join(agentDir, "settings.json"), JSON.stringify({
+		compaction: { enabled: true, reserveTokens: 64, keepRecentTokens: 1 },
+	}), "utf8");
+	const host = await createTestOwnerHost(t, piAgentCoordination, {
+		persistent: true,
+		processVisibleModel: true,
+		physicalDisplay: true,
+		cwd: root,
+		agentDir,
+		additionalExtensionPaths: [PROCESS_AGENT_VIEW_PROBE],
+	});
+	host.deferCleanup(async () => {
+		await releaseProcessAgentViewProbe(probe.releasePath);
+	});
+	host.model.setResponses([
+		fauxAssistantMessage("Initial slow-start response supplies Dormant history."),
+		fauxAssistantMessage("Second slow-start response supplies older history."),
+		fauxAssistantMessage(completedResponse),
+	]);
+	const spawn = await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_spawn",
+		"spawn-slow-start-compaction-worker",
+		{
+			title: "Fixture request",
+			request: "Become Dormant before compaction starts.",
+			label: "Slow Start Compaction Worker",
+		},
+	);
+	const agentId = (spawn.details as { agentId: string }).agentId;
+	await waitForCondition(async () =>
+		JSON.stringify(await childEntries(host, agentId)).includes(
+			"Initial slow-start response supplies Dormant history.",
+		)
+	);
+	const initialView = await openSelectedAgentView(host, agentId);
+	initialView.view.handleInput?.("Add another turn before becoming Dormant.");
+	initialView.view.handleInput?.("\r");
+	await waitForCondition(async () =>
+		JSON.stringify(await childEntries(host, agentId)).includes(
+			"Second slow-start response supplies older history.",
+		)
+	);
+	await returnAgentViewToOwner(host, initialView.view, initialView.command);
+	await executeAndCommitRegisteredTool(
+		host.session,
+		"agent_control",
+		"abort-before-slow-start-compaction",
+		{ operation: "abort", agentId },
+	);
+
+	const opened = await openDormantAgentView(host, agentId);
+	await waitForCondition(() =>
+		stripTerminalSequences(opened.view.render(80).join("\n"))
+			.replace(/\s+/g, "")
+			.includes("Secondslow-startresponsesuppliesolderhistory")
+	);
+	const childRuntime = childProcessSessionStarts(
+		await readProcessAgentViewEvidence(probe.evidencePath),
+		agentId,
+	).at(-1);
+	assert.ok(childRuntime);
+	opened.view.handleInput?.("/compact");
+	opened.view.handleInput?.("\r");
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "compaction_started" && entry.pid === childRuntime.pid,
+	));
+	await returnAgentViewToOwner(host, opened.view, opened.command);
+
+	const compactingView = await openDormantAgentView(host, agentId);
+	compactingView.view.handleInput?.(queuedInput);
+	compactingView.view.handleInput?.("\r");
+	await waitForCondition(() =>
+		stripTerminalSequences(compactingView.view.render(80).join("\n")).includes(
+			"Queued message for after compaction",
+		)
+	);
+	await returnAgentViewToOwner(host, compactingView.view, compactingView.command);
+
+	await releaseProcessAgentViewProbe(probe.releasePath);
+	await waitForProcessAgentViewEvidence(probe.evidencePath, (entries) => entries.some(
+		(entry) => entry.kind === "slow_start_entered" && entry.pid === childRuntime.pid,
+	));
+	// Ends at the first outcome: a disposed child never answers, so waiting only
+	// for the response would spend the whole surface budget before failing.
+	// Ends at the first outcome: a disposed child never answers, so waiting only
+	// for the response would spend the whole surface budget before failing.
+	// A child disposed inside this delay exits without session_shutdown.
+	await waitForCondition(async () =>
+		!isProcessAlive(childRuntime.pid) ||
+		JSON.stringify(await childEntries(host, agentId)).includes(completedResponse)
+	);
+	assert.equal(isProcessAlive(childRuntime.pid), true, "the child must outlive its slow successor start");
+	assert.equal(
+		(await childEntries(host, agentId)).filter(
+			(entry) =>
+				entry.type === "message" &&
+				entry.message.role === "user" &&
+				JSON.stringify(entry.message.content).includes(queuedInput),
+		).length,
+		1,
+	);
+});
+
 test("a Dormant command activates the already-attached Agent runtime once", async (t) => {
 	const submittedText = "Start the successor from a Dormant slash command.";
 	const probe = configureProcessAgentViewProbe(t, "dormant-command-message");
@@ -2275,6 +2386,16 @@ function childProcessSessionShutdowns(
 		entry.sessionId === agentId &&
 		entry.pid !== process.pid
 	);
+}
+
+function isProcessAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+		throw error;
+	}
 }
 
 function assertProcessExited(pid: number): void {

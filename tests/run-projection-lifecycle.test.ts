@@ -97,11 +97,11 @@ test("clean release disposes the exact projection and session once", async () =>
 	assert.equal(host.observe().phase, "dormant");
 });
 
-test("public Runtime activity settlement receives a grace period before disposal", async () => {
+test("public Runtime activity settlement rechecks a deferred release", async () => {
 	const resource = createRunResource();
 	resource.setPendingActivity(true);
 	const host = AgentRuntimeSupervisor.createChild({
-		agentId: "activity-grace-period-agent",
+		agentId: "activity-settlement-agent",
 		startSession: async () => resource.startedRun,
 	});
 	const handle = await host.lane.run(() => host.startInLane());
@@ -122,30 +122,12 @@ test("public Runtime activity settlement receives a grace period before disposal
 		await host.lane.run(() => host.releaseIfEligibleInLane(handle)),
 		"retained",
 	);
+	assert.equal(releaseRechecks, 0);
 	resource.setPendingActivity(false);
 	resource.emitStateChanged();
 
-	assert.equal(releaseRechecks, 0);
-	assert.equal(resource.counts().sessionDisposals, 0);
-	assert.equal(
-		await host.lane.run(() => host.releaseIfEligibleInLane(handle)),
-		"retained",
-	);
-	let releaseTimeout: ReturnType<typeof setTimeout> | undefined;
-	try {
-		await Promise.race([
-			released,
-			new Promise<never>((_resolve, reject) => {
-				releaseTimeout = setTimeout(
-					() => reject(new Error("release grace period did not settle")),
-					1_000,
-				);
-			}),
-		]);
-	} finally {
-		if (releaseTimeout) clearTimeout(releaseTimeout);
-	}
 	assert.equal(releaseRechecks, 1);
+	await released;
 	assert.equal(resource.counts().sessionDisposals, 1);
 });
 

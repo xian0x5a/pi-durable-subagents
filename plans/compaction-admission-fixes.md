@@ -1,5 +1,5 @@
 ---
-status: open
+status: done
 ---
 
 ## Goal
@@ -23,6 +23,7 @@ Out of scope: any pi-codex-conversion integration. The user intends to remove it
 
 - Native-threshold compaction failure no longer blocks a custom Delivery. Pi logs it and continues, as it does for native prompts. A Working-Zone failure now always warns and continues; Pi's run-start check then applies at the native threshold.
 - `compacting` status can stay visible through a queued input's `input` and `before_agent_start` hooks.
+- Cancelling a Delivery no longer aborts compaction Pi started; that compaction finishes and only Working-Zone Preparation is aborted. A cancellation that lands after admission hands over to Pi's start answers `transcriptCommitted: false` instead of rejecting; the Owner treats both as uncommitted, and `message.dispatch.completed` carries the error.
 
 ## Work Plan
 
@@ -48,9 +49,14 @@ Run scoped files through `npm run test:fast|test:process|test:conformance -- --f
 
 Input queued behind an extension command is handed to `session.prompt` only after that command finishes, so it is not visible at `compaction_end`. The removed timer covered this for at most 100 ms.
 
+A custom turn an extension starts from `session_compact_failed` is not held either: the finished edge can reach the Owner before `agent_start`. Scheduled Deliveries are safe because `pending_delivery` retains them. The exposed case is a deferred release of a selected child after `/compact`. The removed timer covered this for at most 100 ms too.
+
 ## Progress
 
 - Worktree `.worktrees/compaction-admission`, branch `fix/compaction-admission`, Pi 1.4.0 installed.
+- Regression tests written by an independent agent; five failed on the unfixed code as intended, three guards passed.
+- Items 1 to 4 implemented, obsolete tests updated, docs updated.
+- Independent review found two defects from this change. Both fixed test-first: disposal now reports a held end edge, and `cancelDelivery` aborts only Working-Zone Preparation.
 
 ## Decisions
 
@@ -61,6 +67,11 @@ Input queued behind an extension command is handed to `session.prompt` only afte
 ## Surprises & Discoveries
 
 - Pi's custom starts have checked compaction since at least 1.3.0; plan 140's note says otherwise.
+- `pi-child-process-runtime`'s long scenario depended on cancelled Deliveries leaving context uncompacted. Each scenario now rebuilds its context, which also raised the fixture's faux response budget.
 - Pi's `isCompacting` covers branch summaries, and automatic compaction clears it only after `session_compact_failed` handlers on the failure path. That lag is harmless because automatic compaction runs inside an active Run.
 
 ## Outcomes & Retrospective
+
+Child compaction now defers to Pi: mid-Run threshold compaction runs, a Delivery wakes after a branch summary, Pi's own start check is the only native threshold check, and the Owner releases on a child-reported fact rather than a timer. All four items landed; PCC integration was dropped from scope. Lasting decisions live in `docs/run-supervision.md`, `docs/agent-messaging.md`, `docs/activity-presentation.md`, ADR 0003, and `GLOSSARY.md`.
+
+The hold moved a synchronous edge across a microtask, and review showed both new failure paths lived there or next to it: an edge dropped by disposal, and a cancellation rule written when every compaction during a Delivery belonged to that Delivery. Moving an edge means rechecking everything that relied on its timing.

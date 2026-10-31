@@ -572,6 +572,39 @@ test("cancelling a Delivery parked behind Pi's mid-Run compaction lets that comp
 	assert.equal(session.sessionManager.getEntries().some(entry => entry.type === "custom_message"), false, "the cancelled Delivery stays uncommitted");
 });
 
+test("reloading a generation while its compaction-finished report is held leaves the Owner no longer compacting", { timeout: 5_000 }, async t => {
+	const inputEntered = deferred();
+	const releaseInput = deferred();
+	t.after(releaseInput.resolve);
+	const loopback = await createChildControlLoopback(t, { host: { settings: NATIVE_THRESHOLD_SETTINGS }, configure: pi => {
+		pi.on("input", async () => { inputEntered.resolve(); await releaseInput.promise; return { action: "continue" }; });
+	} });
+	const { host, proxy } = loopback;
+	const session = host.session;
+	seedHistory(session, ABOVE_THRESHOLD_TOKENS);
+	const respond = summaryOr(() => fauxAssistantMessage("Done."));
+	host.model.setResponses([respond, respond, respond, respond]);
+	let queued: Promise<void> | undefined;
+	session.subscribe(event => {
+		// Mirrors interactive mode flushing queued input when compaction ends.
+		if (event.type === "compaction_end" && !queued) {
+			queued = session.prompt("queued", { streamingBehavior: "steer", source: "extension" });
+			void queued.catch(() => undefined);
+		}
+	});
+
+	await session.compact();
+	await inputEntered.promise;
+	await loopback.reload();
+	releaseInput.resolve();
+	await queued;
+	await session.waitForIdle();
+	await sleep(CONTROL_ARRIVAL_MS);
+
+	assert.equal(proxy.isCompacting(), false);
+	assert.equal(proxy.hasPendingActivity(), false);
+});
+
 /** Seeds compactable history whose estimate alone decides Pi's threshold checks. */
 function seedHistory(session: ChildControlLoopback["host"]["session"], totalTokens: number): void {
 	const pairs = 3;
