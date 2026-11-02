@@ -11,7 +11,9 @@ readonly BASE_BRANCH="main"
 readonly UPGRADE_PR_AUTHOR="dependabot[bot]"
 readonly UPGRADE_PR_TITLE_MARKER="the pi group"
 readonly CI_POLL_SECONDS=30
-readonly CI_POLL_ATTEMPTS=60 # 30 minutes: macOS runners can queue for a long time
+# 25 minutes: long enough for a queued macOS runner, and short enough to report
+# a timeout itself before Claude Code's 30-minute background command limit.
+readonly CI_POLL_ATTEMPTS=50
 
 fail() {
 	echo "merge-pi-upgrade: $*" >&2
@@ -36,10 +38,12 @@ require_upgrade_pull_request() {
 # runs yet is "pending", not "passed": they appear a moment after a push.
 ci_state() {
 	local check_runs failed unfinished
+	# Explicit: `set -e` does not apply inside the caller's command substitution,
+	# and partial output from a failed read must never count as passing.
 	check_runs="$(
 		gh api --paginate "repos/$REPOSITORY/commits/$commit/check-runs?per_page=100" \
 			--jq '.check_runs[] | "\(.status) \(.conclusion) \(.name)"'
-	)"
+	)" || fail "could not read check runs for $commit"
 	failed="$(grep '^completed ' <<<"$check_runs" | grep -Ev '^completed (success|neutral|skipped) ' || true)"
 	unfinished="$(grep -v '^completed ' <<<"$check_runs" || true)"
 
