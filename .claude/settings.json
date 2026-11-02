@@ -1,0 +1,7 @@
+{
+	"permissions": {
+		"allow": [
+			"Bash(./scripts/merge-pi-upgrade.sh *)"
+		]
+	}
+}

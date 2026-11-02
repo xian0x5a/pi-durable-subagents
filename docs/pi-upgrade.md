@@ -89,10 +89,14 @@ Comment on the PR with the changelog sorting, check results, issues filed, and t
 
 ### 7. Merge
 
-Stop if the PR has been closed in the meantime. Merge exactly the commit you checked, so that nothing pushed since slips in untested:
+Stop if the PR has been closed in the meantime. Run the merge gate in the background, exactly in this form, with the PR number and the full SHA of the commit you checked written out literally. Wait for it to exit before ending the run.
 
 ```bash
-gh api -X PUT repos/xian0x5a/pi-durable-subagents/pulls/<number>/merge -f merge_method=merge -f sha="$(git rev-parse HEAD)"
+./scripts/merge-pi-upgrade.sh <number> <full commit sha>
 ```
+
+The script confirms this is a Dependabot Pi PR on that commit, waits up to 25 minutes for GitHub CI to pass, and merges exactly that commit, so nothing pushed since slips in untested. A failing GitHub check stops it even if step 4 showed the same failure is pre-existing; that PR is for a human to merge. If the script exits non-zero, check whether the PR merged, comment with what happened, and stop.
+
+The script is the only way to merge from a run. Auto mode blocks any merge no human approved, and a run's prompt does not count as approval. `.claude/settings.json` allows this one command form instead.
 
 A labelled merge starts the Release on merge workflow, which bumps the version, tags it, and publishes.
