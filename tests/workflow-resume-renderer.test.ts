@@ -4,6 +4,7 @@ import test from "node:test";
 import type { ExtensionAPI, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { registerCoordinationTools, type CoordinationToolHandlers } from "../src/tools/coordination-tools.ts";
 import type { WorkflowResumeReceipt } from "../src/protocol/workflow-resume.ts";
+import { keybindingHints } from "./support/keybinding-hints.ts";
 
 let resumeTool: ToolDefinition;
 registerCoordinationTools({
@@ -19,7 +20,7 @@ const theme = {
 const context = {
 	args: {}, lastComponent: undefined, toolCallId: "resume", invalidate() {}, state: {}, cwd: process.cwd(),
 	argsComplete: true, isPartial: false, expanded: false, showImages: false,
-	isError: false, executionStarted: true, durationMs: undefined, outputPad: 0,
+	isError: false, executionStarted: true, durationMs: undefined, outputPad: 0, ...keybindingHints,
 };
 const receipt: WorkflowResumeReceipt = {
 	workflowId: "workflow-full-id",

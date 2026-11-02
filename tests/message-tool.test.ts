@@ -6,6 +6,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 
 import piAgentCoordination from "../src/index.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
+import { keybindingHints } from "./support/keybinding-hints.ts";
 
 const plainTheme = {
 	fg: (_color: string, text: string) => text,
@@ -77,7 +78,7 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 		expanded: false,
 		showImages: false,
 		isError: false,
-		executionStarted: true, durationMs: undefined, outputPad: 0,
+		executionStarted: true, durationMs: undefined, outputPad: 0, ...keybindingHints,
 	};
 	const callText = tool.renderCall(args, plainTheme, renderContext).render(160).join("\n");
 	assert.match(callText, new RegExp(`Owner · ${receiverAgentId.slice(-8)}`));
@@ -246,7 +247,7 @@ test("native Agent Spawn rendering exposes verified runtime configuration only i
 		expanded: false,
 		showImages: false,
 		isError: false,
-		executionStarted: true, durationMs: undefined, outputPad: 0,
+		executionStarted: true, durationMs: undefined, outputPad: 0, ...keybindingHints,
 	};
 	assert.doesNotThrow(() =>
 		tool.renderCall!(

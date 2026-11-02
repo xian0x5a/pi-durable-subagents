@@ -17,6 +17,7 @@ import {
 } from "../src/protocol/message-delivery.ts";
 import { registerMessageDeliveryRenderer, renderMessageDelivery, renderMessageProjection } from "../src/tools/message-delivery-renderer.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
+import { keybindingHints } from "./support/keybinding-hints.ts";
 
 const plainTheme = {
 	fg: (_color: string, text: string) => text,
@@ -27,7 +28,7 @@ const plainTheme = {
 test("left-click toggles a delivered block without affecting its batched sibling", () => {
 	initTheme("dark");
 	const component = renderMessageDelivery(customDelivery([longMessage("first"), longMessage("second")]),
-		{ expanded: false, outputPad: 1 }, plainTheme);
+		{ expanded: false, outputPad: 1, ...keybindingHints }, plainTheme);
 	assert.doesNotMatch(component.render(60).join("\n"), /first ending|second ending/);
 	assert.equal(pointer(component, "[Message]")?.handled, true);
 	assert.match(component.render(60).join("\n"), /first ending/);
@@ -44,7 +45,7 @@ test("registered delivery clicks survive rebuild, invalidation and resize; globa
 	} as ExtensionAPI);
 	const message = customDelivery([longMessage("first"), longMessage("second")]);
 	const render = (expanded = false, theme = plainTheme) => {
-		const component = renderer(message, { expanded, outputPad: 1 }, theme);
+		const component = renderer(message, { expanded, outputPad: 1, ...keybindingHints }, theme);
 		assert.ok(component);
 		return component;
 	};
@@ -70,7 +71,7 @@ test("registered delivery clicks survive rebuild, invalidation and resize; globa
 	assert.doesNotMatch(component.render(60).join("\n"), /second ending/);
 	component = render(false);
 	assert.doesNotMatch(component.render(60).join("\n"), /first ending|second ending/);
-	const separate = renderer(customDelivery([longMessage("first")]), { expanded: false, outputPad: 1 }, plainTheme)!;
+	const separate = renderer(customDelivery([longMessage("first")]), { expanded: false, outputPad: 1, ...keybindingHints }, plainTheme)!;
 	pointer(component, "from first");
 	assert.doesNotMatch(separate.render(60).join("\n"), /first ending/);
 });
@@ -78,7 +79,7 @@ test("registered delivery clicks survive rebuild, invalidation and resize; globa
 test("delivery pointer handling leaves non-primary clicks, scrolling and selection untouched", () => {
 	initTheme("dark");
 	const component = renderMessageDelivery(customDelivery([longMessage("first")]),
-		{ expanded: false, outputPad: 1 }, plainTheme);
+		{ expanded: false, outputPad: 1, ...keybindingHints }, plainTheme);
 	for (const type of ["press", "release", "move", "drag", "wheel"] as const) {
 		assert.equal(pointer(component, "[Message]", { type }), undefined);
 	}
@@ -97,7 +98,7 @@ test("Request and Answer delivery bodies toggle independently", () => {
 	const component = renderMessageDelivery(customDelivery([
 		{ kind: "request", title: "Review", requestMessageId: "request", fromAgentId: "requester", question: `${body}\nRequest ending` },
 		{ kind: "answer", requestTitle: "Review", requestMessageId: "request", answerId: "answer", fromAgentId: "responder", answer: `${body}\nAnswer ending` },
-	]), { expanded: false, outputPad: 1 }, plainTheme);
+	]), { expanded: false, outputPad: 1, ...keybindingHints }, plainTheme);
 	pointer(component, "[Answer]");
 	assert.match(component.render(60).join("\n"), /Answer ending/);
 	assert.doesNotMatch(component.render(60).join("\n"), /Request ending/);
@@ -137,7 +138,7 @@ test("collapsed Message Delivery shows type, sender label, compact identity, and
 			fromAgentId: senderAgentId,
 			content: fullBody,
 		}]),
-		{ expanded: false, outputPad: 1 },
+		{ expanded: false, outputPad: 1, ...keybindingHints },
 		plainTheme,
 		(agentId) => agentId === senderAgentId ? "Researcher" : undefined,
 	).render(60).join("\n");
@@ -172,7 +173,7 @@ test("collapsed Message Delivery puts a dim truncation hint after ten visible bo
 				(_, index) => `Line ${index + 1}.`,
 			).join("\n"),
 		}]),
-		{ expanded: false, outputPad: 1 },
+		{ expanded: false, outputPad: 1, ...keybindingHints },
 		hintTheme,
 	).render(60).join("\n");
 
@@ -214,7 +215,7 @@ test("expanded Message Delivery shows each human-readable type and complete body
 	];
 	const rendered = renderMessageDelivery(
 		customDelivery(projections),
-		{ expanded: true, outputPad: 1 },
+		{ expanded: true, outputPad: 1, ...keybindingHints },
 		plainTheme,
 		(agentId) => agentId === requesterAgentId ? "Requester" : undefined,
 	).render(120).join("\n");
@@ -241,7 +242,7 @@ test("delivered items hug their badge; one blank row is the only item boundary",
 				answerId: "answer-one", fromAgentId: "responder", answer: "Answer body.",
 			},
 		]),
-		{ expanded, outputPad: 1 },
+		{ expanded, outputPad: 1, ...keybindingHints },
 		plainTheme,
 		).render(80);
 		// Expanding changes the body renderer, never the block's spacing, and the
@@ -271,7 +272,7 @@ test("a delivered body's own framing whitespace never renders", () => {
 			fromAgentId: "sender",
 			content: "\r\n\r\nFirst line.\r\n\r\nSecond line.\r\n\r\n",
 		}]),
-		{ expanded, outputPad: 1 },
+		{ expanded, outputPad: 1, ...keybindingHints },
 		plainTheme,
 		).render(80);
 		assert.deepEqual(
@@ -296,7 +297,7 @@ test("the Owner extension registers the Message Delivery renderer", async (t) =>
 			fromAgentId: ownerAgentId,
 			content: "Owner-authored direction.",
 		}]),
-		{ expanded: false, outputPad: 1 },
+		{ expanded: false, outputPad: 1, ...keybindingHints },
 		plainTheme,
 	);
 	if (!ownerComponent) throw new Error("Owner Message Delivery did not render");

@@ -21,6 +21,7 @@ import {
 	renderAgentObserveResult,
 } from "../src/tools/coordination-renderers.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
+import { keybindingHints } from "./support/keybinding-hints.ts";
 
 const ordinaryTools = [
 	"agent_control",
@@ -189,7 +190,7 @@ test("coordination renderers keep routine receipts compact", async (t) => {
 			expanded: false,
 			showImages: false,
 			isError: false,
-			executionStarted: true, durationMs: undefined, outputPad: 0,
+			executionStarted: true, durationMs: undefined, outputPad: 0, ...keybindingHints,
 		};
 		const call = tool.renderCall(sample.args, plainTheme, context).render(120);
 		assert.equal(call.length, sample.callLines, sample.toolName);
@@ -366,7 +367,7 @@ test("Human Request owns a transcript-native question and Answer shell", async (
 		expanded: false,
 		showImages: false,
 		isError: false,
-		executionStarted: true, durationMs: undefined, outputPad: 0,
+		executionStarted: true, durationMs: undefined, outputPad: 0, ...keybindingHints,
 	};
 	const waiting = tool.renderCall(args, plainTheme, pendingContext).render(60).join("\n");
 	assert.match(waiting, /\[Ask User\].*waiting/s);
@@ -427,7 +428,7 @@ test("report publication failure remains visible instead of claiming pending or 
 	}, { expanded: false, isPartial: false }, plainTheme, {
 		args: {}, toolCallId: "report-failure", invalidate() {}, lastComponent: undefined,
 		state: {}, cwd: host.cwd, argsComplete: true, isPartial: false, expanded: false,
-		showImages: false, isError: true, executionStarted: true, durationMs: undefined, outputPad: 0,
+		showImages: false, isError: true, executionStarted: true, durationMs: undefined, outputPad: 0, ...keybindingHints,
 	}).render(120);
 	assert.match(lines.join("\n"), /Report persistence failed/);
 	assert.doesNotMatch(lines.join("\n"), /Report retained|Report pending/);

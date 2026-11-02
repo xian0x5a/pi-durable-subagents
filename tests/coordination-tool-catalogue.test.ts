@@ -18,6 +18,7 @@ import {
 } from "../src/tools/coordination-tools.ts";
 import type { AgentTemplateCatalogueSnapshot } from "../src/templates/agent-templates.ts";
 import { createTestOwnerHost, type TestCleanupRegistrar } from "./support/pi-host.ts";
+import { keybindingHints } from "./support/keybinding-hints.ts";
 
 const ownerTools = [
 	"agent_control",
@@ -208,7 +209,7 @@ function renderToolResult(
 		taggedTheme,
 		{
 			args: {}, lastComponent: undefined, toolCallId: tool.name, invalidate() {}, state: {}, cwd: process.cwd(),
-			argsComplete: true, executionStarted: true, durationMs: undefined, outputPad: 0, showImages: false, ...state,
+			argsComplete: true, executionStarted: true, durationMs: undefined, outputPad: 0, ...keybindingHints, showImages: false, ...state,
 		},
 	).render(240).join("\n");
 }
