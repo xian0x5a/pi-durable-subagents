@@ -109,7 +109,8 @@ const UsageSchema = piOwned({
 const ToolDeclarationSchema = piOwned({
 	name: NonEmptyStringSchema,
 	description: Type.String(),
-	parameters: Type.Record(Type.String(), Type.Unknown()),
+	// Pi 1.5 types tool parameters as any JSON Schema object, not only TypeBox.
+	parameters: piOwned({}),
 	constrainedSampling: Type.Optional(Type.Unknown()),
 });
 const ToolReferenceSchema = piOwned({ name: NonEmptyStringSchema });
