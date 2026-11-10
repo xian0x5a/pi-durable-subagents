@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Merges one Dependabot Pi upgrade PR once GitHub CI passes on the exact commit.
 #
-# .claude/settings.json lets Claude run this script with no human approval, and
-# a labelled merge publishes to npm, so these checks are that release's gate.
+# The Merge Pi upgrade workflow runs this with no human approval, and a labelled
+# merge publishes to npm, so these checks are that release's gate.
 # REST only: the cloud session's GitHub proxy rejects GraphQL.
 set -euo pipefail
 
@@ -10,9 +10,13 @@ readonly REPOSITORY="xian0x5a/pi-durable-subagents"
 readonly BASE_BRANCH="main"
 readonly UPGRADE_PR_AUTHOR="dependabot[bot]"
 readonly UPGRADE_PR_TITLE_MARKER="the pi group"
+# The Merge Pi upgrade workflow's job name. Its check runs land on the PR head
+# too: the running one would never finish while waiting on itself, and one from
+# an earlier failed attempt would fail every retry.
+readonly MERGE_GATE_CHECK_NAME="Pi upgrade merge gate"
 readonly CI_POLL_SECONDS=30
 # 25 minutes: long enough for a queued macOS runner, and short enough to report
-# a timeout itself before Claude Code's 30-minute background command limit.
+# a timeout itself before the workflow's 30-minute job limit.
 readonly CI_POLL_ATTEMPTS=50
 
 fail() {
@@ -42,7 +46,7 @@ ci_state() {
 	# and partial output from a failed read must never count as passing.
 	check_runs="$(
 		gh api --paginate "repos/$REPOSITORY/commits/$commit/check-runs?per_page=100" \
-			--jq '.check_runs[] | "\(.status) \(.conclusion) \(.name)"'
+			--jq ".check_runs[] | select(.name != \"$MERGE_GATE_CHECK_NAME\") | \"\\(.status) \\(.conclusion) \\(.name)\""
 	)" || fail "could not read check runs for $commit"
 	failed="$(grep '^completed ' <<<"$check_runs" | grep -Ev '^completed (success|neutral|skipped) ' || true)"
 	unfinished="$(grep -v '^completed ' <<<"$check_runs" || true)"

@@ -8,6 +8,15 @@ on:
   pull_request_target:
     types: [closed]
     branches: [main]
+  # Started by the Merge Pi upgrade workflow, whose merge fires no closed event
+  # because it uses the workflow token.
+  workflow_dispatch:
+    inputs:
+      release_kind:
+        description: Version to bump
+        type: choice
+        options: [patch, minor]
+        required: true
 
 # Merges release one after another. queue: max keeps every waiting run; by
 # default a newer run cancels a waiting one, losing its release. (actionlint
@@ -22,6 +31,7 @@ permissions:
 jobs:
   release:
     if: >-
+      github.event_name == 'workflow_dispatch' ||
       github.event.pull_request.merged &&
       (contains(github.event.pull_request.labels.*.name, 'release:patch') ||
        contains(github.event.pull_request.labels.*.name, 'release:minor'))
@@ -40,7 +50,7 @@ jobs:
       - name: Bump the version and tag it
         id: bump
         env:
-          RELEASE_KIND: ${{ contains(github.event.pull_request.labels.*.name, 'release:minor') && 'minor' || 'patch' }}
+          RELEASE_KIND: ${{ inputs.release_kind || (contains(github.event.pull_request.labels.*.name, 'release:minor') && 'minor' || 'patch') }}
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'

@@ -5,9 +5,9 @@ Pi releases every few days, so upgrades are automated:
 1. Dependabot (`.github/dependabot.yml`) checks npm daily at 14:00 Pacific (its most frequent schedule), exempts Pi from its default 3-day release cooldown, and opens one PR bumping the four `@earendil-works/pi-*` devDependencies.
 2. The **Pi upgrade** Claude Code routine runs on that PR and follows the procedure below. Its GitHub trigger is `pull_request.opened`, filtered to author `dependabot[bot]` and a title containing `the pi group`. Its prompt:
 
-   > Follow docs/pi-upgrade.md for the pull request that triggered this run. You may push to that pull request's head branch, label it, and merge it, as the procedure describes.
+   > Follow docs/pi-upgrade.md for the pull request that triggered this run. You may push to that pull request's head branch and label it, as the procedure describes.
 
-The agent merges only when it is confident; anything else stays open for a human, with the reason in a PR comment. When the upgrade changed `src/`, the agent labels the PR for release, and merging it publishes a release (see [Development](development.md#releasing)).
+The agent merges only when it is confident, by labelling the PR for a merge workflow; anything else stays open for a human, with the reason in a PR comment. When the upgrade changed `src/`, the agent labels the PR for release, and merging it publishes a release (see [Development](development.md#releasing)).
 
 When a newer Pi release arrives while a Pi PR is open, Dependabot closes that PR as superseded and opens a new one, which starts a new run. That run carries over the fixes from the closed PR.
 
@@ -89,14 +89,15 @@ Comment on the PR with the changelog sorting, check results, issues filed, and t
 
 ### 7. Merge
 
-Stop if the PR has been closed in the meantime. Run the merge gate in the background, exactly in this form, with the PR number and the full SHA of the commit you checked written out literally. Wait for it to exit before ending the run.
+Stop if the PR has been closed in the meantime. Confirm the PR's head is still the commit you checked, then add the `pi-upgrade:merge` label. That ends the run; do not wait for the merge.
 
 ```bash
-./scripts/merge-pi-upgrade.sh <number> <full commit sha>
+gh api repos/xian0x5a/pi-durable-subagents/pulls/<number> --jq .head.sha
+gh api repos/xian0x5a/pi-durable-subagents/issues/<number>/labels -f 'labels[]=pi-upgrade:merge'
 ```
 
-The script confirms this is a Dependabot Pi PR on that commit, waits up to 25 minutes for GitHub CI to pass, and merges exactly that commit, so nothing pushed since slips in untested. A failing GitHub check stops it even if step 4 showed the same failure is pre-existing; that PR is for a human to merge. If the script exits non-zero, check whether the PR merged, comment with what happened, and stop.
+Do not merge the PR yourself. Auto mode blocks any merge no human approved, and a run's prompt does not count as approval. The label hands the merge to GitHub Actions instead: the Merge Pi upgrade workflow runs `scripts/merge-pi-upgrade.sh` from `main` on the PR's head commit at the time of labelling. The script confirms this is a Dependabot Pi PR on that commit, waits up to 25 minutes for GitHub CI to pass, and merges exactly that commit, so nothing pushed after the label slips in untested. A failing GitHub check stops it even if step 4 showed the same failure is pre-existing; that PR is for a human to merge. When the workflow fails, it comments on the PR with a link to the run.
 
-The script is the only way to merge from a run. Auto mode blocks any merge no human approved, and a run's prompt does not count as approval. `.claude/settings.json` allows this one command form instead.
+When the PR carries a release label, the workflow then starts the Release on merge workflow, which bumps the version, tags it, and publishes. Add the release label before `pi-upgrade:merge`: the workflow reads the labels as they were when it started.
 
-A labelled merge starts the Release on merge workflow, which bumps the version, tags it, and publishes.
+A human can merge a checked Pi PR the same way, by adding the label.
