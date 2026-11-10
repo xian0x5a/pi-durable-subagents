@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Merges one Dependabot Pi upgrade PR once GitHub CI passes on the exact commit.
 #
-# .claude/settings.json lets Claude run this script with no human approval, and
-# a labelled merge publishes to npm, so these checks are that release's gate.
+# The Merge Pi upgrade workflow runs this with no human approval, and a labelled
+# merge publishes to npm, so these checks are that release's gate.
 # REST only: the cloud session's GitHub proxy rejects GraphQL.
 set -euo pipefail
 
@@ -12,7 +12,7 @@ readonly UPGRADE_PR_AUTHOR="dependabot[bot]"
 readonly UPGRADE_PR_TITLE_MARKER="the pi group"
 readonly CI_POLL_SECONDS=30
 # 25 minutes: long enough for a queued macOS runner, and short enough to report
-# a timeout itself before Claude Code's 30-minute background command limit.
+# a timeout itself before the workflow's 30-minute job limit.
 readonly CI_POLL_ATTEMPTS=50
 
 fail() {

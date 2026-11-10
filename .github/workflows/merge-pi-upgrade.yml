@@ -1,0 +1,55 @@
+name: Merge Pi upgrade
+
+# The Pi upgrade routine adds the `pi-upgrade:merge` label to a Dependabot Pi PR
+# it has checked, and this workflow merges it once CI passes. The routine cannot
+# merge itself: Claude Code's auto mode blocks merging a PR no human approved,
+# and a routine's saved prompt does not count as approval. See docs/pi-upgrade.md.
+on:
+  # pull_request_target runs this file and the gate script from main, so a push
+  # to the PR branch cannot change what decides the merge. Its runs belong to
+  # main's commit, so they are not among the PR checks the gate waits for.
+  pull_request_target:
+    types: [labeled]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  merge:
+    if: github.event.label.name == 'pi-upgrade:merge'
+    runs-on: ubuntu-latest
+    # The gate waits up to 25 minutes for CI.
+    timeout-minutes: 30
+    permissions:
+      contents: write # merge the PR
+      pull-requests: write # merge the PR, and comment when this run fails
+      checks: read # read the PR's check runs
+      actions: write # start the Release on merge workflow
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PULL_REQUEST: ${{ github.event.pull_request.number }}
+    steps:
+      - uses: actions/checkout@v6
+      # The head at labelling time: the routine labels only once the head is the
+      # commit it checked, and the gate refuses to merge if the head moves.
+      - name: Merge once CI passes
+        run: ./scripts/merge-pi-upgrade.sh "$PULL_REQUEST" "$HEAD_SHA"
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      # A merge made with the workflow token fires no closed event, so Release
+      # on merge does not start on its own.
+      - name: Start the release
+        if: >-
+          contains(github.event.pull_request.labels.*.name, 'release:patch') ||
+          contains(github.event.pull_request.labels.*.name, 'release:minor')
+        run: gh workflow run release-on-merge.yml --repo "$GITHUB_REPOSITORY" --ref main -f release_kind="$RELEASE_KIND"
+        env:
+          RELEASE_KIND: ${{ contains(github.event.pull_request.labels.*.name, 'release:minor') && 'minor' || 'patch' }}
+      # No person started this run, so report on the PR where a human will look.
+      - name: Report the failure
+        if: failure()
+        run: >-
+          gh pr comment "$PULL_REQUEST" --repo "$GITHUB_REPOSITORY" --body
+          "The Merge Pi upgrade workflow failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID.
+          Check whether this PR merged and whether its release started."
