@@ -6,8 +6,7 @@ name: Merge Pi upgrade
 # and a routine's saved prompt does not count as approval. See docs/pi-upgrade.md.
 on:
   # pull_request_target runs this file and the gate script from main, so a push
-  # to the PR branch cannot change what decides the merge. Its runs belong to
-  # main's commit, so they are not among the PR checks the gate waits for.
+  # to the PR branch cannot change what decides the merge.
   pull_request_target:
     types: [labeled]
     branches: [main]
@@ -17,6 +16,8 @@ permissions:
 
 jobs:
   merge:
+    # The gate script skips check runs with this name when it waits for CI.
+    name: Pi upgrade merge gate
     if: github.event.label.name == 'pi-upgrade:merge'
     runs-on: ubuntu-latest
     # The gate waits up to 25 minutes for CI.
