@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { Type, type Static, type TObject, type TSchema } from "typebox";
+import { Type, type TObject, type TSchema } from "typebox";
 import { Value } from "typebox/value";
 
 /*
@@ -30,15 +30,31 @@ type OperationForm = Readonly<{
 	notes: readonly string[];
 }>;
 
-/** The declaration the model sees: a flat object for an operation union, otherwise the schema itself. */
-export function modelFacingParameters(schema: TSchema): TSchema {
+export type OperationToolDeclaration = Readonly<{
+	parameters: TSchema;
+	prepareArguments(args: unknown): unknown;
+}>;
+
+/**
+ * For an operation union: the flat declaration the model sees, and the check of
+ * the raw tool-call arguments against the union. Undefined for any other schema,
+ * which the model sees as is.
+ */
+export function operationToolDeclaration(toolName: string, schema: TSchema): OperationToolDeclaration | undefined {
 	const variants = operationVariants(schema);
-	if (variants === undefined) return schema;
+	if (variants === undefined) return undefined;
 	const forms = operationForms(variants);
+	return {
+		parameters: flatDeclaration(variants, forms),
+		prepareArguments: (args) => checkOperationArguments(toolName, schema, forms, args),
+	};
+}
+
+function flatDeclaration(variants: readonly OperationVariant[], forms: readonly OperationForm[]): TSchema {
 	const fieldNames = [...new Set(variants.flatMap((variant) => Object.keys(variant.properties)))]
 		.filter((name) => name !== "operation");
-	// Plain JSON Schema: spreading TypeBox schemas would turn their hidden modifier
-	// keys into enumerable ones that the provider would then receive.
+	// Plain JSON Schema: TypeBox's Type.Optional on a spread copy would add its
+	// modifier as an enumerable key that the provider would then receive.
 	return {
 		type: "object",
 		properties: {
@@ -55,17 +71,17 @@ export function modelFacingParameters(schema: TSchema): TSchema {
 }
 
 /**
- * Accept exactly the inputs the operation union accepts. The model-facing
- * declaration cannot state per-operation requirements, so this check fails fast
- * with the operation's field list and what the arguments got wrong.
+ * Accept exactly the inputs the operation union accepts. The flat declaration
+ * cannot state per-operation requirements, so this check fails fast with the
+ * operation's field list and what the arguments got wrong.
  */
-export function parseToolArguments<S extends TSchema>(toolName: string, schema: S, value: unknown): Static<S> {
+function checkOperationArguments(
+	toolName: string,
+	schema: TSchema,
+	forms: readonly OperationForm[],
+	value: unknown,
+): unknown {
 	if (Value.Check(schema, value)) return value;
-	const variants = operationVariants(schema);
-	if (variants === undefined) {
-		throw new Error(`invalid_input: ${toolName} arguments are invalid: ${describeErrors(schema, value)}`);
-	}
-	const forms = operationForms(variants);
 	const operation = typeof value === "object" && value !== null ? (value as { operation?: unknown }).operation : undefined;
 	const form = forms.find((candidate) => candidate.operation === operation);
 	if (form === undefined) {

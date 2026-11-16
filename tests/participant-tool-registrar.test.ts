@@ -2,7 +2,7 @@ import "./support/supervised-run.ts";
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { fauxAssistantMessage, fauxToolCall, getCurrentSystemPrompt } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, getCurrentSystemPrompt, validateToolArguments, type JsonObject } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
 
@@ -604,12 +604,23 @@ test("operation tools reject inputs outside the operation union before any handl
 		]),
 	);
 	const host = await createRegistrarHost(t, "moderator", { ...handlers, ...recording } as typeof handlers);
+	// Pi's order: prepareArguments on the raw arguments, native validation, then execute.
+	const callThroughPi = async (toolName: string, raw: object) => {
+		const tool = host.session.getToolDefinition(toolName)!;
+		const prepared = tool.prepareArguments ? tool.prepareArguments(raw) : raw;
+		const validated = validateToolArguments(
+			{ name: toolName, description: "", parameters: tool.parameters },
+			fauxToolCall(toolName, prepared as JsonObject),
+		);
+		return executeTool(host, toolName, "call", validated);
+	};
 	const cases: [tool: string, handler: string, valid: object, invalid: object[]][] = [
 		["agent_message", "message", { operation: "send", targetAgent: "a", content: "x" }, [
 			{ operation: "answer", requestId: "r", answer: "x", deliveryMode: "steer" },
 			{ operation: "send", content: "x" },
 			{ operation: "poll", messageId: "m", content: "x" },
 			{ operation: "unknown" },
+			{ operation: "answer", requestId: "r", answer: "a", targetAgent: null },
 		]],
 		["agent_observe", "observe", { operation: "search", scope: "direct_children" }, [
 			{ operation: "search", scope: "authorized" },
@@ -618,6 +629,7 @@ test("operation tools reject inputs outside the operation union before any handl
 		["agent_control", "control", { operation: "interrupt", agentId: "a" }, [
 			{ operation: "resume", agentId: "a" },
 			{ operation: "interrupt", agentId: "a", content: "x" },
+			{ operation: "interrupt", agentId: "a", content: null },
 		]],
 		["moderator_control", "moderatorControl", { operation: "resolve", summary: "s", rationale: "r" }, [
 			{ operation: "resolve", summary: "s" },
@@ -625,16 +637,26 @@ test("operation tools reject inputs outside the operation union before any handl
 		]],
 	];
 	for (const [toolName, handlerName, valid, invalid] of cases) {
+		const tool = host.session.getToolDefinition(toolName)!;
 		for (const input of invalid) {
 			await assert.rejects(
-				executeTool(host, toolName, "call-invalid", input),
+				callThroughPi(toolName, input),
 				(error: Error) => error.message.startsWith("invalid_input:") && error.message.includes(toolName),
 				`${toolName} ${JSON.stringify(input)}`,
 			);
 		}
-		await executeTool(host, toolName, "call-valid", valid);
-		assert.equal(calls.pop(), `${handlerName}:${JSON.stringify(valid)}`, toolName);
+		// The null cases are the point of prepareArguments: Pi alone coerces them into
+		// something the flat declaration accepts, so only the hook can block them.
+		for (const input of invalid.filter((candidate) => Object.values(candidate).includes(null))) {
+			assert.doesNotThrow(() => validateToolArguments(
+				{ name: toolName, description: "", parameters: tool.parameters },
+				fauxToolCall(toolName, input as JsonObject),
+			), `${toolName} ${JSON.stringify(input)} should pass Pi validation alone`);
+		}
 		assert.deepEqual(calls, [], `${toolName} ran a handler for invalid input`);
+		await callThroughPi(toolName, valid);
+		assert.equal(calls.pop(), `${handlerName}:${JSON.stringify(valid)}`, toolName);
+		assert.deepEqual(calls, [], toolName);
 	}
 	await host.runtime.dispose();
 });

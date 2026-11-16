@@ -33,6 +33,7 @@ const ordinaryTools = [
 	"agent_wait",
 	"ask_user",
 ] as const;
+const operationTools = new Set(["agent_message", "agent_observe", "agent_control", "moderator_control"]);
 const moderatorTools = [
 	"agent_control",
 	"agent_message",
@@ -96,6 +97,12 @@ test("role tool registration exposes strict sequential tools with compact native
 				const tool = host.session.getToolDefinition(toolName);
 				assert.ok(tool, toolName);
 				assert.equal(tool.executionMode, "sequential", toolName);
+				// Only operation-discriminated tools check an exact union before Pi's validation.
+				assert.equal(
+					typeof tool.prepareArguments,
+					operationTools.has(toolName) ? "function" : "undefined",
+					toolName,
+				);
 				assert.equal(typeof tool.renderCall, "function", toolName);
 				assert.equal(typeof tool.renderResult, "function", toolName);
 				assertProviderCompatibleObjectSchema(tool.parameters, toolName);
