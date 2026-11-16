@@ -19,6 +19,7 @@ import {
 	coordinationToolCatalogue,
 } from "./coordination-tool-catalogue.ts";
 import { renderInFlightLabel, renderToolError } from "./coordination-renderers.ts";
+import { modelFacingParameters, parseToolArguments } from "./operation-parameters.ts";
 
 export type CoordinationRole = "owner" | "ordinary" | "moderator";
 
@@ -212,12 +213,13 @@ function toolDefinition(
 		...(guidance === undefined ? {} : { promptGuidelines: [...guidance] }),
 		executionMode: "sequential",
 		exposure: COORDINATION_TOOL_EXPOSURE,
-		parameters: entry.parameters,
+		parameters: modelFacingParameters(entry.parameters),
 		...(entry.renderShell === undefined ? {} : { renderShell: entry.renderShell }),
 		renderCall: (args, theme, context) => entry.renderCall(args, theme, context, presentation),
 		renderResult: (result, options, theme, context) =>
 			renderResultLifecycle(entry, result, options, theme, context, presentation),
-		async execute(toolCallId, params, signal, onUpdate, ctx) {
+		async execute(toolCallId, rawParams, signal, onUpdate, ctx) {
+			const params = parseToolArguments(entry.name, entry.parameters, rawParams);
 			const details = await entry.execute(handlers, { toolCallId, params, signal, onUpdate, ctx });
 			const result = encodeToolResult(details);
 			return entry.endsToolLoop?.(params, details) ? { ...result, terminate: true } : result;

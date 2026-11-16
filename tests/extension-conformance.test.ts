@@ -20,6 +20,8 @@ import {
 	renderAgentObserveCall,
 	renderAgentObserveResult,
 } from "../src/tools/coordination-renderers.ts";
+import piAgentCoordination from "../src/index.ts";
+import { coordinationToolSchemas } from "../src/tools/coordination-tool-catalogue.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
 import { keybindingHints } from "./support/keybinding-hints.ts";
 
@@ -404,20 +406,25 @@ test("Human Request owns a transcript-native question and Answer shell", async (
 	await host.runtime.dispose();
 });
 
+// Gemini 3+ strict tool sampling rejects a top-level union, so every declaration is one closed object.
 function assertProviderCompatibleObjectSchema(schema: unknown, toolName: string): void {
 	assert.ok(typeof schema === "object" && schema !== null, toolName);
-	const record = schema as {
-		type?: unknown;
-		additionalProperties?: unknown;
-		anyOf?: Array<{ additionalProperties?: unknown }>;
-	};
+	const record = schema as Record<string, unknown>;
 	assert.equal(record.type, "object", toolName);
-	const variants = record.anyOf ?? [record];
-	assert.ok(variants.length > 0, toolName);
-	for (const variant of variants) {
-		assert.equal(variant.additionalProperties, false, toolName);
+	assert.equal(record.additionalProperties, false, toolName);
+	for (const union of ["anyOf", "oneOf", "allOf"]) {
+		assert.equal(Object.hasOwn(record, union), false, `${toolName} declares top-level ${union}`);
 	}
 }
+
+test("owner tool declarations are single closed objects", async (t) => {
+	const host = await createTestOwnerHost(t, piAgentCoordination);
+	const names = Object.keys(coordinationToolSchemas).filter((name) => host.session.getToolDefinition(name));
+	assert.ok(names.includes("agent_message"));
+	for (const name of names) {
+		assertProviderCompatibleObjectSchema(host.session.getToolDefinition(name)?.parameters, name);
+	}
+});
 
 test("report publication failure remains visible instead of claiming pending or retained", async (t) => {
 	const host = await createTestOwnerHost(t, roleTools("moderator"));

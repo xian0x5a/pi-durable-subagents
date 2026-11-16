@@ -12,6 +12,12 @@ The Workflow Coordinator is a composition root. It constructs coordination modul
 
 A protocol link is one whose absence changes coordination outcomes: Delivery, waits, incidents, Operation Review, or shutdown. Each one is either a required constructor argument, for commands a module issues, or a subscription the consuming module makes in its own constructor, for notifications it consumes. For example, Operational Incident detection subscribes to Message coordination's Delivery progress and to Human Requests' human waiting, and Interactive Selection subscribes to native quit of child Runtimes. A test that hand-wires these modules therefore gets the production glue, and omitting a link is a type error. Optional callbacks remain only for clocks, boundary hooks used by tests, presentation adapters, and the Agent activity change notification.
 
+## Model-facing tool declarations
+
+Every coordination tool declares one closed object as its parameters, with no top-level `anyOf`, `oneOf`, or `allOf`. Gemini 3+ strict tool sampling (Pi sends `functionCallingConfig.mode: "VALIDATED"`) rejects a function whose top-level parameters schema is a union, so one such tool fails every request in the session. Unions nested inside a property are accepted.
+
+Operation tools (`agent_message`, `agent_observe`, `agent_control`, `moderator_control`) still define their input as a union of closed per-operation objects in the catalogue. That union is the exact contract: the control transport validates against it, and so does each tool's `execute` before any handler runs. Registration derives the declaration from it (`src/tools/operation-parameters.ts`): an `operation` enum whose description lists each operation's fields, plus every other field as an optional property that names the operations requiring it. Valid calls keep the shape the union accepts, so committed transcripts are unaffected. Inputs only the union rejects fail with an `invalid_input` error that lists the operation's fields.
+
 ## Running tests
 
 `npm test` is the complete regression suite. Use the supervised npm entry points for all development runs: `test:fast` (four concurrent files), `test:process` (serial), and `test:conformance` (serial, the focused compatibility gate). They forward any other Node test flag, such as `--test-only`.

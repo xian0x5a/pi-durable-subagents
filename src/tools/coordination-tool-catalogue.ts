@@ -60,7 +60,9 @@ import { renderAgentTemplatePromptGuide } from "./agent-template-prompt-guide.ts
 /*
  * The Coordination Tool Catalogue: one entry per model-facing coordination tool.
  * Each entry declares everything specific to its tool; `coordination-tools.ts`
- * registers them and owns what they share.
+ * registers them and owns what they share. An operation tool's parameters are a
+ * union of closed per-operation objects: the exact input contract. The model sees
+ * a flat declaration derived from it (see `operation-parameters.ts`).
  */
 
 const AGENT_MESSAGE_PROMPT_GUIDE = `<agent_message>
@@ -86,8 +88,8 @@ For poll/retry messageId and cancel requestMessageId, use the full ID or a uniqu
 
 const MESSAGE_DELIVERY_RULES = "deferred (default): Messages enter at settlement; Requests also enter at agent_wait, one at a time in FIFO order. steer: delivers an admission-ordered batch at the next safe boundary, after active generation and its tool batch finish, ahead of Deferred. Steer Messages, Requests, or Cancellations preempt agent_wait with the eligible Steer batch. background: enters only at settlement with no Answers owed and no eligible higher-priority delivery; never preempts agent_wait. Background Messages and Requests share FIFO order and may starve.";
 
-// Stated once here rather than once per authoring operation: the schema repeats any
-// field both authoring operations accept, and this rule text is long.
+// Stated once in guidance rather than in the deliveryMode parameter, which both
+// authoring operations accept: this rule text is long.
 const DELIVERY_MODE_PROMPT_GUIDE = `<delivery_modes>
 ${MESSAGE_DELIVERY_RULES}
 </delivery_modes>`;
@@ -195,7 +197,7 @@ const messageDeliveryModeParameters = Type.Union([
 // definitions would leave references dangling, and strict constrained sampling rejects
 // references outright. Inlining costs nothing on Gemini, which expands references per
 // use site anyway.
-const agentMessageParameters = objectRootUnion(Type.Union([
+const agentMessageParameters = Type.Union([
 	Type.Object(
 		{
 			operation: Type.Literal("send"),
@@ -252,7 +254,7 @@ const agentMessageParameters = objectRootUnion(Type.Union([
 		},
 		{ additionalProperties: false },
 	),
-]));
+]);
 
 const agentWaitParameters = Type.Object({
 	requestMessageIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {
@@ -339,7 +341,7 @@ const agentObservePhase = Type.Union([
 const agentSearchNonBlankString = Type.String({ minLength: 1, pattern: "\\S" });
 const agentSearchQuery = Type.String({
 	...agentSearchNonBlankString,
-	description: "Case-insensitive literal substring matched against Agent label or description. No wildcard or regex matching. Omit to search using other filters; authorized scope requires at least one of query, agentIdSuffix, or phase.",
+	description: "Case-insensitive literal substring matched against Agent label or description. No wildcard or regex matching. Omit to search using other filters.",
 });
 const agentSearchOptionalProperties = {
 	query: Type.Optional(agentSearchQuery),
@@ -366,6 +368,11 @@ const agentSearchNamedSpawnerParameters = Type.Object(
 	},
 	{ additionalProperties: false },
 );
+// Stated once on each authorized form; the model-facing declaration lists it with the search operation.
+const authorizedSearchFilterRule = {
+	additionalProperties: false,
+	description: 'Scope "authorized" also requires at least one of query, agentIdSuffix, or phase.',
+} as const;
 const agentSearchAuthorizedQueryParameters = Type.Object(
 	{
 		operation: Type.Literal("search"),
@@ -373,7 +380,7 @@ const agentSearchAuthorizedQueryParameters = Type.Object(
 		...agentSearchOptionalProperties,
 		query: agentSearchQuery,
 	},
-	{ additionalProperties: false },
+	authorizedSearchFilterRule,
 );
 const agentSearchAuthorizedSuffixParameters = Type.Object(
 	{
@@ -382,7 +389,7 @@ const agentSearchAuthorizedSuffixParameters = Type.Object(
 		...agentSearchOptionalProperties,
 		agentIdSuffix: agentSearchNonBlankString,
 	},
-	{ additionalProperties: false },
+	authorizedSearchFilterRule,
 );
 const agentSearchAuthorizedPhaseParameters = Type.Object(
 	{
@@ -391,9 +398,9 @@ const agentSearchAuthorizedPhaseParameters = Type.Object(
 		...agentSearchOptionalProperties,
 		phase: agentObservePhase,
 	},
-	{ additionalProperties: false },
+	authorizedSearchFilterRule,
 );
-const agentObserveParameters = objectRootUnion(Type.Union([
+const agentObserveParameters = Type.Union([
 	Type.Object(
 		{ operation: Type.Literal("obligations") },
 		{ additionalProperties: false, description: "List the caller's outstanding Requests by ID, requester, and title." },
@@ -420,9 +427,9 @@ const agentObserveParameters = objectRootUnion(Type.Union([
 	agentSearchAuthorizedQueryParameters,
 	agentSearchAuthorizedSuffixParameters,
 	agentSearchAuthorizedPhaseParameters,
-]));
+]);
 
-const agentControlParameters = objectRootUnion(Type.Union([
+const agentControlParameters = Type.Union([
 	Type.Object(
 		{
 			operation: Type.Literal("interrupt"),
@@ -445,7 +452,7 @@ const agentControlParameters = objectRootUnion(Type.Union([
 		},
 		{ additionalProperties: false },
 	),
-]));
+]);
 
 const askUserParameters = Type.Object(
 	{
@@ -472,7 +479,7 @@ const evidencePointer = Type.Union([
 	),
 ]);
 
-const moderatorControlParameters = objectRootUnion(Type.Union([
+const moderatorControlParameters = Type.Union([
 	Type.Object(
 		{
 			operation: Type.Literal("renew_review_deadline"),
@@ -498,7 +505,7 @@ const moderatorControlParameters = objectRootUnion(Type.Union([
 		},
 		{ additionalProperties: false },
 	),
-]));
+]);
 
 const reportToUserParameters = Type.Object({
 	symptom: Type.String({ minLength: 1, description: "Observed runtime malfunction." }),
@@ -812,11 +819,4 @@ function defineCoordinationTool<
 	entry: CoordinationToolEntry<Name, Roles, Handlers, Params, Details>,
 ): CoordinationToolEntry<Name, Roles, Handlers, Params, Details> {
 	return entry;
-}
-
-function objectRootUnion<T extends TSchema>(schema: T): T {
-	// DeepSeek validates the function schema root before evaluating its variants.
-	// Keep TypeBox's discriminated union for Pi validation while exposing the
-	// object root required by OpenAI-compatible providers.
-	return Object.assign(schema, { type: "object" as const });
 }

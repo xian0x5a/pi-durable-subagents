@@ -592,6 +592,53 @@ test("participant registrar preserves handler errors and Moderator control routi
 	await host.runtime.dispose();
 });
 
+test("operation tools reject inputs outside the operation union before any handler runs", async (t) => {
+	const calls: string[] = [];
+	const recording = Object.fromEntries(
+		["message", "observe", "control", "moderatorControl"].map((name) => [
+			name,
+			async (...args: unknown[]) => {
+				calls.push(`${name}:${JSON.stringify(args.find((arg) => typeof arg === "object" && arg !== null && "operation" in arg))}`);
+				return (handlers as unknown as Record<string, (...a: unknown[]) => unknown>)[name]!(...args);
+			},
+		]),
+	);
+	const host = await createRegistrarHost(t, "moderator", { ...handlers, ...recording } as typeof handlers);
+	const cases: [tool: string, handler: string, valid: object, invalid: object[]][] = [
+		["agent_message", "message", { operation: "send", targetAgent: "a", content: "x" }, [
+			{ operation: "answer", requestId: "r", answer: "x", deliveryMode: "steer" },
+			{ operation: "send", content: "x" },
+			{ operation: "poll", messageId: "m", content: "x" },
+			{ operation: "unknown" },
+		]],
+		["agent_observe", "observe", { operation: "search", scope: "direct_children" }, [
+			{ operation: "search", scope: "authorized" },
+			{ operation: "status", agentId: "a", scope: "direct_children" },
+		]],
+		["agent_control", "control", { operation: "interrupt", agentId: "a" }, [
+			{ operation: "resume", agentId: "a" },
+			{ operation: "interrupt", agentId: "a", content: "x" },
+		]],
+		["moderator_control", "moderatorControl", { operation: "resolve", summary: "s", rationale: "r" }, [
+			{ operation: "resolve", summary: "s" },
+			{ operation: "resolve", summary: "s", rationale: "r", agentId: "a" },
+		]],
+	];
+	for (const [toolName, handlerName, valid, invalid] of cases) {
+		for (const input of invalid) {
+			await assert.rejects(
+				executeTool(host, toolName, "call-invalid", input),
+				(error: Error) => error.message.startsWith("invalid_input:") && error.message.includes(toolName),
+				`${toolName} ${JSON.stringify(input)}`,
+			);
+		}
+		await executeTool(host, toolName, "call-valid", valid);
+		assert.equal(calls.pop(), `${handlerName}:${JSON.stringify(valid)}`, toolName);
+		assert.deepEqual(calls, [], `${toolName} ran a handler for invalid input`);
+	}
+	await host.runtime.dispose();
+});
+
 async function createRegistrarHost<Role extends CoordinationRole>(
 	t: TestCleanupRegistrar,
 	role: Role,
