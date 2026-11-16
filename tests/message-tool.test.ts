@@ -5,6 +5,7 @@ import test from "node:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
 import piAgentCoordination from "../src/index.ts";
+import { coordinationToolSchemas } from "../src/tools/coordination-tool-catalogue.ts";
 import { createTestOwnerHost } from "./support/pi-host.ts";
 import { keybindingHints } from "./support/keybinding-hints.ts";
 
@@ -18,19 +19,22 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 	const tool = host.session.getToolDefinition("agent_message");
 	assert.ok(tool?.renderCall);
 	assert.ok(tool.renderResult);
-	const parameters = tool.parameters as unknown as {
-		anyOf?: Array<{
-			properties?: Record<string, {
-				const?: unknown;
-				anyOf?: Array<{ const?: unknown }>;
-			}>;
-		}>;
+	const declared = tool.parameters as unknown as {
+		properties: Record<string, { enum?: unknown[] }>;
+		required?: string[];
 	};
-	assert.deepEqual(
-		parameters.anyOf?.map((candidate) => candidate.properties?.operation?.const),
-		["send", "request", "answer", "cancel", "poll", "retry"],
-	);
-	const requestSchema = parameters.anyOf?.find(
+	assert.deepEqual(declared.properties.operation?.enum, [
+		"send", "request", "answer", "cancel", "poll", "retry",
+	]);
+	assert.deepEqual(declared.required, ["operation"]);
+	// The exact contract keeps the per-operation shapes the flat declaration cannot state.
+	const variants = coordinationToolSchemas.agent_message.anyOf as unknown as Array<{
+		properties?: Record<string, {
+			const?: unknown;
+			anyOf?: Array<{ const?: unknown }>;
+		}>;
+	}>;
+	const requestSchema = variants.find(
 		(candidate) => candidate.properties?.operation?.const === "request",
 	);
 	const contextPreparationSchema = requestSchema?.properties?.contextPreparation as unknown as {
@@ -50,7 +54,7 @@ test("native Agent Message rendering shows bounded Steer intent and typed dispos
 			?.map(({ const: value }) => value),
 		["low", "medium", "high"],
 	);
-	const cancelSchema = parameters.anyOf?.find(
+	const cancelSchema = variants.find(
 		(candidate) => candidate.properties?.operation?.const === "cancel",
 	);
 	assert.deepEqual(Object.keys(cancelSchema?.properties ?? {}).sort(), [

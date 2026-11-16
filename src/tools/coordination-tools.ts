@@ -19,6 +19,7 @@ import {
 	coordinationToolCatalogue,
 } from "./coordination-tool-catalogue.ts";
 import { renderInFlightLabel, renderToolError } from "./coordination-renderers.ts";
+import { operationToolDeclaration } from "./operation-parameters.ts";
 
 export type CoordinationRole = "owner" | "ordinary" | "moderator";
 
@@ -212,7 +213,13 @@ function toolDefinition(
 		...(guidance === undefined ? {} : { promptGuidelines: [...guidance] }),
 		executionMode: "sequential",
 		exposure: COORDINATION_TOOL_EXPOSURE,
-		parameters: entry.parameters,
+		// An operation tool checks its exact input contract in prepareArguments, on the
+		// raw arguments, before Pi validates them against the flat declaration. Pi's
+		// coercion drops null optional properties, and every operation's field is
+		// optional in that declaration, while transcript readers re-validate the raw
+		// committed arguments: a call valid only after coercion would run, then be
+		// rejected on replay.
+		...(operationToolDeclaration(entry.name, entry.parameters) ?? { parameters: entry.parameters }),
 		...(entry.renderShell === undefined ? {} : { renderShell: entry.renderShell }),
 		renderCall: (args, theme, context) => entry.renderCall(args, theme, context, presentation),
 		renderResult: (result, options, theme, context) =>
