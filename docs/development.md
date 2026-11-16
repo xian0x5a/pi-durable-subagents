@@ -18,6 +18,10 @@ Every coordination tool declares one closed object as its parameters, with no to
 
 Operation tools (`agent_message`, `agent_observe`, `agent_control`, `moderator_control`) still define their input as a union of closed per-operation objects in the catalogue. That union is the exact contract: the control transport validates against it, and so does each tool call before any handler runs. Registration derives the declaration from it (`src/tools/operation-parameters.ts`): an `operation` enum whose description lists each operation's fields, plus every other field as an optional property that names the operations requiring it. Valid calls keep the shape the union accepts, so committed transcripts are unaffected. Pi's `prepareArguments` hook runs the union check on the raw arguments, before Pi's own validation coerces them (for example by dropping `null` optional properties), because transcript readers re-validate the raw committed arguments. Inputs only the union rejects fail with an `invalid_input` error that lists the operation's fields.
 
+Do not opt these tools into strict sampling (`constrainedSampling` or `strict: "prefer"`). Pi would make every optional field required and nullable, and Claude's strict mode limits optional and union parameters across all strict tools in a request (see `strict-tool-limits.js` in `@earendil-works/pi-ai`). Under Gemini, Pi sends `VALIDATED` mode regardless, and these declarations pass it.
+
+Nesting the union under a property also passes Gemini's `VALIDATED` mode, but it is worse. It still needs the runtime check, because constrained sampling ignored `minLength`. It made the model switch operation rather than leave out a required field (`resume` without `content` became `interrupt`). It also roughly doubles the declaration's prompt tokens, and it changes every call's argument shape.
+
 ## Running tests
 
 `npm test` is the complete regression suite. Use the supervised npm entry points for all development runs: `test:fast` (four concurrent files), `test:process` (serial), and `test:conformance` (serial, the focused compatibility gate). They forward any other Node test flag, such as `--test-only`.
