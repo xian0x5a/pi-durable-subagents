@@ -2,6 +2,9 @@
 
 Durable Pi agents that collaborate asynchronously under explicit Owner and Spawner supervision.
 
+> [!WARNING]
+> **This project is unmaintained and the repository is archived.** Version 0.4.7 is the final release; it works with Pi 1.5.2, including Gemini 3+ models. It will not follow later Pi releases. The code, docs, and design records (`docs/adr/`) remain available for reference.
+
 ## Features
 
 ### Interactive Agent switching
